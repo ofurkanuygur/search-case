@@ -1,0 +1,113 @@
+services:
+  # PostgreSQL Database - Central database for all SearchCase services
+  search-db:
+    image: postgres:16-alpine
+    container_name: search-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+      TZ: UTC
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Hangfire Worker Service
+  hangfire-worker:
+    build:
+      context: ./src/HangfireWorker
+      dockerfile: Dockerfile
+      args:
+        BUILDCONFIG: Release
+    container_name: searchcase-hangfire-worker
+    depends_on:
+      search-db:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__HangfireDb=Host=search-db;Port=5432;Database=hangfire;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres};Pooling=true;MinPoolSize=2;MaxPoolSize=20;Connection Idle Lifetime=300;
+      - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-5}
+      - Hangfire__ServerName=hangfire-worker-1
+      - Hangfire__Queues__0=default
+      - Hangfire__Queues__1=critical
+      - Hangfire__DashboardEnabled=true
+      - Microservices__ServiceA__BaseUrl=${SERVICE_A_URL:-http://host.docker.internal:8001}
+      - Microservices__ServiceA__TimeoutSeconds=300
+      - Microservices__ServiceB__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
+      - Microservices__ServiceB__TimeoutSeconds=300
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__Hangfire=Information
+      - TZ=UTC
+    ports:
+      - "5100:80"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # pgAdmin (Optional - for database management)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: searchcase-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@searchcase.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    ports:
+      - "5050:80"
+    networks:
+      - searchcase-network
+    depends_on:
+      - search-db
+    restart: unless-stopped
+    profiles:
+      - tools
+
+networks:
+  searchcase-network:
+    driver: bridge
+    name: searchcase-network
+
+volumes:
+  pgadmin-data:
+    name: searchcase-pgadmin-data
+    driver: local

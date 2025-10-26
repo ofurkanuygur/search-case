@@ -1,0 +1,76 @@
+# .NET
+bin/
+obj/
+out/
+*.user
+*.suo
+*.userprefs
+*.cache
+*.dll
+*.exe
+*.pdb
+*.log
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+[Bb]uild/
+[Bb]uilds/
+x64/
+x86/
+[Aa]rm/
+[Aa]rm64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio
+.vs/
+.vscode/
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# Test Coverage
+*.coverage
+*.coveragexml
+coverage/
+TestResults/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Docker
+.env
+docker-compose.override.yml
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Data
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Local development
+appsettings.Local.json
+*.local.json

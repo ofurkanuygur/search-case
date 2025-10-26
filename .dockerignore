@@ -1,0 +1,35 @@
+# Directories
+**/bin/
+**/obj/
+**/out/
+**/logs/
+**/TestResults/
+**/.vs/
+**/.vscode/
+**/.idea/
+
+# Files
+**/*.trx
+**/*.user
+**/*.userosscache
+**/*.suo
+**/.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+**/README*.md
+**/*.md
+
+# Docker files (don't copy these into image)
+**/Dockerfile*
+**/docker-compose*
+**/.dockerignore
+
+# Environment
+**/.env
+**/.env.*
+!**/.env.example
