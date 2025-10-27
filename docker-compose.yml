@@ -29,6 +29,90 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # JSON Provider Microservice
+  json-provider:
+    build:
+      context: .
+      dockerfile: ./src/JsonProviderMicroservice/Dockerfile
+    container_name: searchcase-json-provider
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ExternalApi__BaseUrl=https://raw.githubusercontent.com/WEG-Technology/mock/refs/heads/main/v2/provider1
+      - ExternalApi__TimeoutSeconds=10
+      - ExternalApi__RetryCount=3
+      - ExternalApi__RetryDelaySeconds=2
+      - ExternalApi__CircuitBreakerThreshold=5
+      - ExternalApi__CircuitBreakerDurationSeconds=30
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8001:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # XML Provider Microservice
+  xml-provider:
+    build:
+      context: .
+      dockerfile: ./src/XmlProviderMicroservice/Dockerfile
+    container_name: searchcase-xml-provider
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ExternalApi__BaseUrl=https://raw.githubusercontent.com/WEG-Technology/mock/refs/heads/main/v2/provider2
+      - ExternalApi__TimeoutSeconds=10
+      - ExternalApi__RetryCount=3
+      - ExternalApi__RetryDelaySeconds=2
+      - ExternalApi__CircuitBreakerThreshold=5
+      - ExternalApi__CircuitBreakerDurationSeconds=30
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8002:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
   # Hangfire Worker Service
   hangfire-worker:
     build:
@@ -40,6 +124,8 @@ services:
     depends_on:
       search-db:
         condition: service_healthy
+      json-provider:
+        condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
       - ASPNETCORE_URLS=http://+:80
@@ -49,7 +135,7 @@ services:
       - Hangfire__Queues__0=default
       - Hangfire__Queues__1=critical
       - Hangfire__DashboardEnabled=true
-      - Microservices__ServiceA__BaseUrl=${SERVICE_A_URL:-http://host.docker.internal:8001}
+      - Microservices__ServiceA__BaseUrl=http://json-provider:8080
       - Microservices__ServiceA__TimeoutSeconds=300
       - Microservices__ServiceB__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
       - Microservices__ServiceB__TimeoutSeconds=300

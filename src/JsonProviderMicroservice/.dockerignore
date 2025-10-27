@@ -1,0 +1,16 @@
+# Directories
+**/bin/
+**/obj/
+**/out/
+**/logs/
+**/.vs/
+**/.vscode/
+**/.idea/
+
+# Files
+**/*.md
+**/.DS_Store
+**/.gitignore
+**/.dockerignore
+**/Dockerfile*
+**/docker-compose*
