@@ -12,6 +12,7 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ./scripts/init-write-db.sql:/docker-entrypoint-initdb.d/init-write-db.sql:ro
     ports:
       - "5433:5432"
     healthcheck:
@@ -113,7 +114,58 @@ services:
           cpus: '0.25'
           memory: 256M
 
-  # Hangfire Worker Service
+  # Write Service (Hangfire + Content Sync)
+  write-service:
+    build:
+      context: .
+      dockerfile: ./src/WriteService/Dockerfile
+    container_name: searchcase-write-service
+    depends_on:
+      search-db:
+        condition: service_healthy
+      json-provider:
+        condition: service_healthy
+      xml-provider:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__WriteServiceDb=Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres};Pooling=true;MinPoolSize=2;MaxPoolSize=20
+      - ConnectionStrings__HangfireDb=Host=search-db;Port=5432;Database=hangfire;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      - Providers__JsonProvider__BaseUrl=http://json-provider:8080
+      - Providers__JsonProvider__TimeoutSeconds=30
+      - Providers__XmlProvider__BaseUrl=http://xml-provider:8080
+      - Providers__XmlProvider__TimeoutSeconds=30
+      - Hangfire__WorkerCount=2
+      - Hangfire__SyncJobCronExpression=*/5 * * * *
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8003:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Hangfire Worker Service (Original - to be deprecated)
   hangfire-worker:
     build:
       context: ./src/HangfireWorker
@@ -133,7 +185,7 @@ services:
       - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-5}
       - Hangfire__ServerName=hangfire-worker-1
       - Hangfire__Queues__0=default
-      - Hangfire__Queues__1=critical
+      - Hangfire__Queues__1=criticahttp://localhost:5100/hangfirel
       - Hangfire__DashboardEnabled=true
       - Microservices__ServiceA__BaseUrl=http://json-provider:8080
       - Microservices__ServiceA__TimeoutSeconds=300
