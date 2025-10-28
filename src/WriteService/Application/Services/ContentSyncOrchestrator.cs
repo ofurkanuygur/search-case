@@ -5,6 +5,7 @@ using WriteService.Data.Repositories;
 using WriteService.Domain.Entities;
 using WriteService.Domain.Enums;
 using WriteService.Domain.Models;
+using WriteService.Infrastructure.EventBus;
 
 namespace WriteService.Application.Services;
 
@@ -17,18 +18,21 @@ public sealed class ContentSyncOrchestrator
     private readonly IChangeDetectionStrategy _changeDetectionStrategy;
     private readonly IBulkOperationRepository _bulkRepository;
     private readonly IContentRepository _contentRepository;
+    private readonly IEventBusClient? _eventBusClient;
     private readonly ILogger<ContentSyncOrchestrator> _logger;
 
     public ContentSyncOrchestrator(
         IChangeDetectionStrategy changeDetectionStrategy,
         IBulkOperationRepository bulkRepository,
         IContentRepository contentRepository,
-        ILogger<ContentSyncOrchestrator> logger)
+        ILogger<ContentSyncOrchestrator> logger,
+        IEventBusClient? eventBusClient = null)
     {
         _changeDetectionStrategy = changeDetectionStrategy ?? throw new ArgumentNullException(nameof(changeDetectionStrategy));
         _bulkRepository = bulkRepository ?? throw new ArgumentNullException(nameof(bulkRepository));
         _contentRepository = contentRepository ?? throw new ArgumentNullException(nameof(contentRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _eventBusClient = eventBusClient; // Optional for backwards compatibility
     }
 
     /// <summary>
@@ -151,7 +155,44 @@ public sealed class ContentSyncOrchestrator
                 await _bulkRepository.SaveChangeLogsAsync(changeLogs, cancellationToken);
             }
 
-            // Step 7: Complete sync batch
+            // Step 7: Publish event to EventBus (only IDs, as per theoretical diagram)
+            if ((created.Any() || updated.Any()) && _eventBusClient != null)
+            {
+                try
+                {
+                    _logger.LogInformation(
+                        "Publishing event for {Created} created and {Updated} updated contents",
+                        created.Count,
+                        updated.Count);
+
+                    // Extract only IDs - consumers will fetch full data from DB
+                    // This implements "Single Source of Truth" pattern
+                    var createdIds = created.Select(c => c.Id).ToList();
+                    var updatedIds = updated.Select(c => c.Id).ToList();
+                    var sourceProviders = created.Concat(updated)
+                        .Select(c => c.SourceProvider)
+                        .Distinct()
+                        .FirstOrDefault();
+
+                    await _eventBusClient.PublishContentChangedAsync(
+                        createdIds,
+                        updatedIds,
+                        sourceProviders,
+                        cancellationToken);
+
+                    _logger.LogInformation(
+                        "Event published successfully for {Total} content changes",
+                        createdIds.Count + updatedIds.Count);
+                }
+                catch (Exception ex)
+                {
+                    // Event publishing failure should not fail the sync
+                    _logger.LogWarning(ex,
+                        "Failed to publish event to EventBus. Sync completed but event not sent");
+                }
+            }
+
+            // Step 8: Complete sync batch
             syncBatch.CompleteSuccessfully();
             await _bulkRepository.SaveSyncBatchAsync(syncBatch, cancellationToken);
 

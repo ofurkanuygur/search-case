@@ -10,7 +10,8 @@ SearchCase is a microservices-based content aggregation system that fetches data
 2. **JsonProviderMicroservice** - JSON provider integration (.NET 9.0)
 3. **XmlProviderMicroservice** - XML provider integration (.NET 9.0)
 4. **SearchCase.Contracts** - Shared contracts and canonical data models (.NET 9.0)
-5. **PostgreSQL** - Database for Hangfire job storage and persistence
+5. **WriteService** - New content synchronization service with change detection (ASP.NET Core 9.0)
+6. **PostgreSQL** - Database for Hangfire job storage, content persistence, and audit logs
 
 ## Architecture
 
@@ -39,13 +40,23 @@ Provider microservices are **stateless** and expose:
 - `/health` - Health checks
 - `/swagger` - OpenAPI documentation (always enabled)
 
-### Hangfire Worker
+### Hangfire Worker & WriteService
 
-Orchestrates scheduled jobs that trigger provider microservices:
+The system has two Hangfire-based services:
+
+#### Original HangfireWorker (Being Deprecated)
 - **FrequentJob**: Runs every 5 minutes, calls JsonProviderMicroservice
 - **DailyJob**: Runs daily at 02:00 UTC, calls XmlProviderMicroservice (configurable)
 - Uses PostgreSQL for job persistence with schema `hangfire.*`
-- Dashboard available at `/hangfire` (no auth in Development)
+- Dashboard available at `http://localhost:5100/hangfire` (when running)
+
+#### New WriteService (Active)
+- Combines Hangfire scheduling with content synchronization
+- **ContentSyncJob**: Fetches from providers and syncs to database
+- **FreshnessScoreUpdateJob**: Updates content freshness scores
+- Implements change detection using hash-based comparison
+- Dashboard available at `http://localhost:8003/hangfire`
+- Uses Entity Framework Core for content persistence
 
 ## Common Commands
 
@@ -134,10 +145,12 @@ cd src/HangfireWorker && dotnet run
 
 | Service | Port | Key Endpoints |
 |---------|------|---------------|
-| **Hangfire Worker** | 5100 | `/hangfire` (dashboard), `/health` |
+| **Hangfire Worker** | 5100 | `/hangfire` (dashboard), `/health` (not running by default) |
+| **WriteService** | 8003 | `/hangfire` (dashboard), `/health`, `/api/content` |
 | **JSON Provider** | 8001 | `/api/provider/data`, `/swagger`, `/health` |
 | **XML Provider** | 8002 | `/api/provider/data`, `/swagger`, `/health` |
-| **PostgreSQL** | 5433 | Database: `hangfire` |
+| **PostgreSQL** | 5433 | Databases: `hangfire`, `searchcase` |
+| **pgAdmin** | 5050 | Web interface (profile: tools) |
 
 Note: Port 5433 is used to avoid conflicts with local PostgreSQL installations (default 5432).
 
@@ -262,7 +275,205 @@ Key variables in `.env` and `docker-compose.yml`:
 
 ## Database Schema
 
-PostgreSQL database `hangfire` contains:
+PostgreSQL contains two databases:
+
+### `hangfire` Database
 - Schema `hangfire.*` - All Hangfire tables auto-created
 - Connection pooling configured: MinPoolSize=2, MaxPoolSize=20
-- Initialization script: `scripts/init-db.sql` creates database on first run
+- Initialization script: `scripts/init-db.sql`
+
+### `searchcase` Database (WriteService)
+- **Contents** table - Stores canonical content with hash-based change tracking
+- **ContentChangeLogs** - Audit trail of all content changes
+- **SyncBatches** - Tracks synchronization operations
+- Initialization script: `scripts/init-write-db.sql`
+
+## C# Concepts and Naming Conventions
+
+### Key Terms
+- **DTO (Data Transfer Object)**: Objects for transferring data between layers (e.g., `JsonProviderResponse`, `CanonicalContent`)
+- **Interface (I prefix)**: Contract defining what methods a class must implement (e.g., `IContentMapper`, `IChangeDetectionService`)
+- **DI (Dependency Injection)**: Pattern for providing dependencies to classes via constructor parameters
+- **async/await**: Non-blocking asynchronous programming pattern
+- **Generic Types <T>**: Type parameters allowing code reuse with different types
+
+### Naming Conventions
+```csharp
+// Interfaces start with 'I'
+public interface IContentService { }
+
+// Private fields start with underscore
+private readonly ILogger _logger;
+
+// Async methods end with 'Async'
+public async Task<Result> GetDataAsync() { }
+
+// Properties use PascalCase
+public string ContentTitle { get; set; }
+
+// Local variables use camelCase
+var contentItems = new List<Content>();
+```
+
+### Common Patterns in This Project
+
+#### Interface-Based Design
+```csharp
+// Define contract
+public interface IChangeDetectionStrategy
+{
+    ChangeDetectionResult DetectChanges(ContentEntity newContent, ContentEntity? existing);
+}
+
+// Multiple implementations
+public class HashBasedChangeDetectionStrategy : IChangeDetectionStrategy { }
+public class TimestampBasedChangeDetectionStrategy : IChangeDetectionStrategy { }
+
+// Easy switching via DI
+services.AddScoped<IChangeDetectionStrategy, HashBasedChangeDetectionStrategy>();
+```
+
+#### Result Pattern
+```csharp
+public class MappingResult<T>
+{
+    public bool IsSuccess { get; set; }
+    public T Data { get; set; }
+    public List<string> Errors { get; set; }
+
+    public static MappingResult<T> Success(T data) => new() { IsSuccess = true, Data = data };
+    public static MappingResult<T> Fail(List<string> errors) => new() { IsSuccess = false, Errors = errors };
+}
+```
+
+## Testing Guidance
+
+### Unit Testing with Interfaces
+
+Interfaces enable easy mocking for unit tests:
+
+```csharp
+// Example test using Moq
+[Test]
+public async Task Should_Detect_New_Content()
+{
+    // Arrange - Create mocks
+    var mockStrategy = new Mock<IChangeDetectionStrategy>();
+    var mockRepository = new Mock<IContentRepository>();
+
+    // Setup mock behavior
+    mockStrategy.Setup(x => x.DetectChanges(It.IsAny<ContentEntity>(), null))
+                .Returns(ChangeDetectionResult.NewContent(new ContentEntity()));
+
+    // Act - Test the service
+    var orchestrator = new ContentSyncOrchestrator(
+        mockStrategy.Object,
+        mockRepository.Object,
+        logger);
+
+    var result = await orchestrator.SynchronizeContentAsync(contents);
+
+    // Assert
+    Assert.AreEqual(1, result.Created);
+    mockStrategy.Verify(x => x.DetectChanges(It.IsAny<ContentEntity>(), null), Times.Once);
+}
+```
+
+### Testing Different Implementations
+
+```csharp
+// Test with different strategies without changing test code
+[TestCase(typeof(HashBasedChangeDetectionStrategy))]
+[TestCase(typeof(TimestampBasedChangeDetectionStrategy))]
+public void Should_Detect_Changes_With_Strategy(Type strategyType)
+{
+    var strategy = (IChangeDetectionStrategy)Activator.CreateInstance(strategyType, logger);
+    // Test logic remains the same
+}
+```
+
+### Integration Testing
+
+```csharp
+// Use TestContainers for database tests
+public class ContentRepositoryTests
+{
+    private PostgreSqlContainer _postgres;
+
+    [SetUp]
+    public async Task Setup()
+    {
+        _postgres = new PostgreSqlBuilder()
+            .WithDatabase("testdb")
+            .Build();
+        await _postgres.StartAsync();
+    }
+
+    [Test]
+    public async Task Should_Save_Content()
+    {
+        // Use real database in container
+        var repository = new ContentRepository(GetDbContext());
+        // Test with actual database operations
+    }
+}
+```
+
+## Architecture Benefits
+
+### Why Use Interfaces?
+
+1. **Testability**: Mock implementations for unit tests
+2. **Flexibility**: Switch implementations without changing consuming code
+3. **Team Development**: Define contracts early, implement in parallel
+4. **Open/Closed Principle**: Open for extension, closed for modification
+
+### Example: Adding a New Change Detection Strategy
+
+```csharp
+// 1. Create new implementation
+public class AIBasedChangeDetectionStrategy : IChangeDetectionStrategy
+{
+    public ChangeDetectionResult DetectChanges(ContentEntity newContent, ContentEntity? existing)
+    {
+        // AI-powered change detection logic
+    }
+}
+
+// 2. Update DI registration (single line change)
+services.AddScoped<IChangeDetectionStrategy, AIBasedChangeDetectionStrategy>();
+
+// 3. No changes needed in ContentSyncOrchestrator or any consuming code!
+```
+
+### Strategy Pattern in Action
+
+The WriteService uses Strategy Pattern for change detection:
+- **Current**: `HashBasedChangeDetectionStrategy` - Compares content hashes
+- **Future Options**: Timestamp-based, AI-based, or hybrid approaches
+- **Switching**: One-line change in DI configuration
+
+## Common Operations
+
+### Switching Between Services
+
+```bash
+# Use original Hangfire Worker
+docker-compose up -d hangfire-worker
+docker-compose stop write-service
+
+# Use new WriteService (default)
+docker-compose up -d write-service
+docker-compose stop hangfire-worker
+```
+
+### Checking Active Hangfire Dashboard
+
+```bash
+# Check which service is running
+docker ps | grep -E "hangfire|write"
+
+# Access the active dashboard
+# If write-service: http://localhost:8003/hangfire
+# If hangfire-worker: http://localhost:5100/hangfire
+```
