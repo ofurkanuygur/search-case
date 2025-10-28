@@ -19,7 +19,7 @@ public sealed class FrequentJob : BaseJob
 
     protected override async Task ExecuteJobAsync(CancellationToken cancellationToken)
     {
-        Logger.LogInformation("Executing FrequentJob - triggering Microservice A");
+        Logger.LogInformation("Executing FrequentJob - triggering SyncJobService");
 
         // Prepare payload with job metadata
         var payload = new
@@ -30,15 +30,15 @@ public sealed class FrequentJob : BaseJob
             Message = "Scheduled execution from Hangfire"
         };
 
-        // Trigger Microservice A
+        // Trigger SyncJobService
         var response = await _microserviceClient.TriggerAsync(
-            serviceName: "ServiceA",
+            serviceName: "SyncJobService",
             endpoint: "/api/process",
             payload: payload,
             cancellationToken: cancellationToken);
 
         Logger.LogInformation(
-            "FrequentJob completed. Microservice A response: {Response}",
+            "FrequentJob completed. SyncJobService response: {Response}",
             response);
     }
 

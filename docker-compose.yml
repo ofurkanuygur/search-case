@@ -445,10 +445,10 @@ services:
       - Hangfire__Queues__0=default
       - Hangfire__Queues__1=criticahttp://localhost:5100/hangfirel
       - Hangfire__DashboardEnabled=true
-      - Microservices__ServiceA__BaseUrl=http://json-provider:8080
-      - Microservices__ServiceA__TimeoutSeconds=300
-      - Microservices__ServiceB__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
-      - Microservices__ServiceB__TimeoutSeconds=300
+      - Microservices__SyncJobService__BaseUrl=http://json-provider:8080
+      - Microservices__SyncJobService__TimeoutSeconds=300
+      - Microservices__DailyJobService__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
+      - Microservices__DailyJobService__TimeoutSeconds=300
       - Logging__LogLevel__Default=Information
       - Logging__LogLevel__Hangfire=Information
       - TZ=UTC

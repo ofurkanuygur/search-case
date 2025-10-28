@@ -35,14 +35,14 @@ try
             name: "postgresql",
             tags: new[] { "db", "ready" })
         .AddUrlGroup(
-            new Uri($"{builder.Configuration["Microservices:ServiceA:BaseUrl"]}/health"),
-            name: "microservice-a",
+            new Uri($"{builder.Configuration["Microservices:SyncJobService:BaseUrl"]}/health"),
+            name: "sync-job-service",
             tags: new[] { "external", "optional" },
             timeout: TimeSpan.FromSeconds(3),
             failureStatus: Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded)
         .AddUrlGroup(
-            new Uri($"{builder.Configuration["Microservices:ServiceB:BaseUrl"]}/health"),
-            name: "microservice-b",
+            new Uri($"{builder.Configuration["Microservices:DailyJobService:BaseUrl"]}/health"),
+            name: "daily-job-service",
             tags: new[] { "external", "optional" },
             timeout: TimeSpan.FromSeconds(3),
             failureStatus: Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded);

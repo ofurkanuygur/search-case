@@ -19,7 +19,7 @@ public sealed class DailyJob : BaseJob
 
     protected override async Task ExecuteJobAsync(CancellationToken cancellationToken)
     {
-        Logger.LogInformation("Executing DailyJob - triggering Microservice B");
+        Logger.LogInformation("Executing DailyJob - triggering DailyJobService");
 
         // Prepare payload with daily job metadata
         var payload = new
@@ -31,15 +31,15 @@ public sealed class DailyJob : BaseJob
             Message = "Daily scheduled execution from Hangfire"
         };
 
-        // Trigger Microservice B
+        // Trigger DailyJobService
         var response = await _microserviceClient.TriggerAsync(
-            serviceName: "ServiceB",
+            serviceName: "DailyJobService",
             endpoint: "/api/process",
             payload: payload,
             cancellationToken: cancellationToken);
 
         Logger.LogInformation(
-            "DailyJob completed. Microservice B response: {Response}",
+            "DailyJob completed. DailyJobService response: {Response}",
             response);
     }
 
