@@ -51,12 +51,43 @@ The system has two Hangfire-based services:
 - Dashboard available at `http://localhost:5100/hangfire` (when running)
 
 #### New WriteService (Active)
-- Combines Hangfire scheduling with content synchronization
-- **ContentSyncJob**: Fetches from providers and syncs to database
-- **FreshnessScoreUpdateJob**: Updates content freshness scores
-- Implements change detection using hash-based comparison
+WriteService is the primary content synchronization service that orchestrates the entire data flow pipeline.
+
+**How It's Triggered:**
+1. **On Startup**: Runs `ContentSyncJob` once immediately when the service starts (for initial data load)
+2. **Scheduled Recurring Job**: Automatically runs every 5 minutes via Hangfire's `RecurringJob.AddOrUpdate`
+3. **Configurable Schedule**: Cron expression defined in `appsettings.json` → `Hangfire:SyncJobCronExpression` (default: `*/5 * * * *`)
+
+**Jobs:**
+- **ContentSyncJob** (Every 5 minutes):
+  1. Fetches content from all provider microservices via `IProviderClient`
+  2. Converts canonical content to domain entities
+  3. Uses `ContentSyncOrchestrator` for synchronized operations:
+     - Hash-based change detection (compares `ContentHash`)
+     - Inserts new content or updates changed content
+     - Logs changes to `ContentChangeLogs` audit table
+  4. Calculates freshness scores only for changed items (performance optimization)
+  5. **Publishes events** to EventBus via `IEventBusClient.PublishContentChangedAsync`
+     - Sends batch events with created/updated content IDs
+     - EventBus forwards to RabbitMQ → SearchWorker → Elasticsearch
+
+- **FreshnessScoreUpdateJob** (Daily at 02:00 UTC):
+  - Recalculates freshness scores for all content
+  - Uses decay algorithm based on `PublishedAt` timestamp
+  - Maintains search relevance over time
+
+**Key Features:**
+- Hash-based change detection (avoids unnecessary updates)
+- Event-driven architecture (publishes to RabbitMQ via EventBusService)
+- Audit logging (all changes tracked in `ContentChangeLogs`)
+- Circuit breaker pattern for EventBus communication (Polly)
 - Dashboard available at `http://localhost:8003/hangfire`
 - Uses Entity Framework Core for content persistence
+
+**Database Tables:**
+- `contents` - Main content storage
+- `content_change_logs` - Audit trail of all changes
+- `sync_batches` - Tracks synchronization operations
 
 ## Common Commands
 
@@ -172,7 +203,7 @@ Located in `appsettings.json` under `Hangfire` section:
 - WorkerCount (default: 5)
 - Queues (default: ["critical", "default"])
 - DashboardEnabled, DashboardPath
-- Microservices:ServiceA:BaseUrl and ServiceB:BaseUrl for job targets
+- Microservices:SyncJobService:BaseUrl and DailyJobService:BaseUrl for job targets
 
 ## Important Code Patterns
 
