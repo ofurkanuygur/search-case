@@ -4,10 +4,12 @@ WORKDIR /src
 
 # Copy csproj and restore dependencies
 COPY ["src/CacheWorker/CacheWorker.csproj", "src/CacheWorker/"]
+COPY ["src/EventBusContracts/EventBusContracts.csproj", "src/EventBusContracts/"]
 RUN dotnet restore "src/CacheWorker/CacheWorker.csproj"
 
 # Copy everything else and build
 COPY ["src/CacheWorker/", "src/CacheWorker/"]
+COPY ["src/EventBusContracts/", "src/EventBusContracts/"]
 WORKDIR "/src/src/CacheWorker"
 RUN dotnet build "CacheWorker.csproj" -c Release -o /app/build
 RUN dotnet publish "CacheWorker.csproj" -c Release -o /app/publish /p:UseAppHost=false

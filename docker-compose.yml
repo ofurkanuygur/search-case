@@ -423,6 +423,97 @@ services:
           cpus: '0.25'
           memory: 256M
 
+  # Search Service - Hybrid Search API (Redis + Elasticsearch)
+  search-service:
+    build:
+      context: .
+      dockerfile: ./src/SearchService/Dockerfile
+    container_name: searchcase-search-service
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - Redis__ConnectionString=redis:6379
+      - Redis__KeyPrefix=searchcase
+      - Redis__DefaultDatabase=0
+      - Redis__ConnectTimeout=5000
+      - Redis__SyncTimeout=5000
+      - Elasticsearch__Uri=http://elasticsearch:9200
+      - Elasticsearch__IndexName=content-index
+      - Elasticsearch__RequestTimeout=60
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__Elastic__Transport=Warning
+      - Logging__LogLevel__StackExchange__Redis=Warning
+      - TZ=UTC
+    ports:
+      - "5001:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Dashboard - Web UI for Search
+  dashboard:
+    build:
+      context: .
+      dockerfile: ./src/Dashboard/Dockerfile
+    container_name: searchcase-dashboard
+    depends_on:
+      search-service:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - SearchService__BaseUrl=http://search-service:8080
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "9000:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
   # Time Service - Daily Score Recalculation Service
   time-service:
     build:
@@ -491,7 +582,7 @@ services:
       - Hangfire__WorkerCount=${HANGFIRE_WORKER_COUNT:-5}
       - Hangfire__ServerName=hangfire-worker-1
       - Hangfire__Queues__0=default
-      - Hangfire__Queues__1=criticahttp://localhost:5100/hangfirel
+      - Hangfire__Queues__1=critical
       - Hangfire__DashboardEnabled=true
       - Microservices__SyncJobService__BaseUrl=http://json-provider:8080
       - Microservices__SyncJobService__TimeoutSeconds=300
