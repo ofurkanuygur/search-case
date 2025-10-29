@@ -1,0 +1,213 @@
+@page
+@model Dashboard.Pages.SearchModel
+@{
+    ViewData["Title"] = "Search Content";
+}
+
+<div class="container py-4">
+    <div class="row mb-4">
+        <div class="col">
+            <h1 class="mb-3">Content Search</h1>
+
+            <!-- Search Form -->
+            <form method="get" class="card shadow-sm">
+                <div class="card-body">
+                    <div class="row g-3">
+                        <!-- Keyword Search -->
+                        <div class="col-md-6">
+                            <label for="keyword" class="form-label">Keyword</label>
+                            <input type="text"
+                                   class="form-control"
+                                   id="keyword"
+                                   name="keyword"
+                                   value="@Model.Keyword"
+                                   placeholder="Search by title or category...">
+                        </div>
+
+                        <!-- Content Type Filter -->
+                        <div class="col-md-3">
+                            <label for="type" class="form-label">Content Type</label>
+                            <select class="form-select" id="type" name="type">
+                                <option value="" selected="@(string.IsNullOrEmpty(Model.Type))">All</option>
+                                <option value="Video" selected="@(Model.Type == "Video")">🎥 Video</option>
+                                <option value="Article" selected="@(Model.Type == "Article")">📄 Article</option>
+                            </select>
+                        </div>
+
+                        <!-- Sort By -->
+                        <div class="col-md-3">
+                            <label for="sort" class="form-label">Sort By</label>
+                            <select class="form-select" id="sort" name="sort">
+                                <option value="Score" selected="@(Model.Sort == "Score")">Score</option>
+                                <option value="Relevance" selected="@(Model.Sort == "Relevance")">Relevance</option>
+                                <option value="Date" selected="@(Model.Sort == "Date")">Date</option>
+                            </select>
+                        </div>
+
+                        <!-- Search Button -->
+                        <div class="col-12">
+                            <button type="submit" class="btn btn-primary">
+                                🔍 Search
+                            </button>
+                            <a href="/Search" class="btn btn-outline-secondary">
+                                Clear
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    @if (Model.HasError)
+    {
+        <!-- Error Alert -->
+        <div class="alert alert-danger" role="alert">
+            <strong>Error:</strong> @Model.ErrorMessage
+        </div>
+    }
+    else if (Model.SearchResult != null)
+    {
+        <!-- Search Metadata -->
+        <div class="row mb-3">
+            <div class="col">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="text-muted">
+                            Found <strong>@Model.SearchResult.Pagination.TotalItems</strong> results
+                            in <strong>@Model.SearchResult.Metadata.LatencyMs</strong>ms
+                        </span>
+                        @if (Model.SearchResult.Metadata.FromCache)
+                        {
+                            <span class="badge bg-success ms-2">Cached</span>
+                        }
+                        <span class="badge bg-info ms-2">@Model.SearchResult.Metadata.Strategy</span>
+                        <span class="badge bg-secondary ms-2">@Model.SearchResult.Metadata.DataSource</span>
+                    </div>
+                    <small class="text-muted">
+                        Page @Model.SearchResult.Pagination.CurrentPage of @Model.GetTotalPages()
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Results -->
+        @if (Model.SearchResult.Items.Count == 0)
+        {
+            <div class="alert alert-info" role="alert">
+                No results found. Try adjusting your search criteria.
+            </div>
+        }
+        else
+        {
+            <div class="row row-cols-1 g-3 mb-4">
+                @foreach (var item in Model.SearchResult.Items)
+                {
+                    <div class="col">
+                        <div class="card shadow-sm h-100">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <h5 class="card-title mb-0">
+                                        @Model.GetContentTypeIcon(item.Type)
+                                        @item.Title
+                                    </h5>
+                                    <span class="@Model.GetContentTypeBadgeClass(item.Type)">
+                                        @item.Type
+                                    </span>
+                                </div>
+
+                                <div class="row g-2 mt-2">
+                                    <div class="col-auto">
+                                        <small class="text-muted">
+                                            <strong>Score:</strong> @item.Score.ToString("F2")
+                                        </small>
+                                    </div>
+                                    <div class="col-auto">
+                                        <small class="text-muted">
+                                            <strong>Published:</strong> @item.PublishedAt.ToString("yyyy-MM-dd")
+                                        </small>
+                                    </div>
+                                    <div class="col-auto">
+                                        <small class="text-muted">
+                                            <strong>Source:</strong> @item.SourceProvider
+                                        </small>
+                                    </div>
+                                </div>
+
+                                @if (item.Categories.Count > 0)
+                                {
+                                    <div class="mt-2">
+                                        @foreach (var category in item.Categories)
+                                        {
+                                            <span class="badge bg-light text-dark me-1">@category</span>
+                                        }
+                                    </div>
+                                }
+
+                                @if (item.Metrics.Count > 0)
+                                {
+                                    <div class="mt-2">
+                                        <small class="text-muted">
+                                            @foreach (var metric in item.Metrics.Take(3))
+                                            {
+                                                <span class="me-3">
+                                                    <strong>@metric.Key:</strong> @metric.Value
+                                                </span>
+                                            }
+                                        </small>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Pagination -->
+            @if (Model.GetTotalPages() > 1)
+            {
+                <nav aria-label="Search results pagination">
+                    <ul class="pagination justify-content-center">
+                        <!-- Previous Button -->
+                        <li class="page-item @(Model.CurrentPage <= 1 ? "disabled" : "")">
+                            <a class="page-link"
+                               href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&page=@(Model.CurrentPage - 1)&pageSize=@Model.PageSize">
+                                Previous
+                            </a>
+                        </li>
+
+                        <!-- Page Numbers -->
+                        @foreach (var pageNum in Model.GetPageNumbers())
+                        {
+                            <li class="page-item @(pageNum == Model.CurrentPage ? "active" : "")">
+                                <a class="page-link"
+                                   href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&page=@pageNum&pageSize=@Model.PageSize">
+                                    @pageNum
+                                </a>
+                            </li>
+                        }
+
+                        <!-- Next Button -->
+                        <li class="page-item @(Model.CurrentPage >= Model.GetTotalPages() ? "disabled" : "")">
+                            <a class="page-link"
+                               href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&page=@(Model.CurrentPage + 1)&pageSize=@Model.PageSize">
+                                Next
+                            </a>
+                        </li>
+                    </ul>
+                </nav>
+            }
+        }
+    }
+</div>
+
+@section Scripts {
+    <script>
+        // Auto-submit on select change (optional - can be removed if too aggressive)
+        // document.querySelectorAll('#type, #sort').forEach(select => {
+        //     select.addEventListener('change', () => {
+        //         document.querySelector('form').submit();
+        //     });
+        // });
+    </script>
+}

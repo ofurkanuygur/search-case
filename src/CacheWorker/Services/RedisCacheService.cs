@@ -20,9 +20,9 @@ public class RedisCacheService : ICacheService, IDisposable
     private readonly TimeSpan _defaultExpiration;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    private const string ContentKeyPrefix = "content:";
-    private const string StatisticsKey = "statistics:cache";
-    private const string LastUpdatedKey = "metadata:last_updated";
+    private const string ContentKeyPrefix = "searchcase:content:";
+    private const string StatisticsKey = "searchcase:statistics:cache";
+    private const string LastUpdatedKey = "searchcase:metadata:last_updated";
 
     public RedisCacheService(IConfiguration configuration, ILogger<RedisCacheService> logger)
     {
@@ -60,28 +60,35 @@ public class RedisCacheService : ICacheService, IDisposable
             foreach (var content in contents)
             {
                 var key = $"{ContentKeyPrefix}{content.Id}";
-                var json = JsonSerializer.Serialize(content, _jsonOptions);
 
-                // Store content with expiration
+                // Store content as Redis hash (matches SearchService expectations)
                 // NOTE: Score is already included in the content from database
-                tasks.Add(batch.StringSetAsync(key, json, _defaultExpiration));
+                var hashEntries = new HashEntry[]
+                {
+                    new HashEntry("id", content.Id),
+                    new HashEntry("title", content.Title),
+                    new HashEntry("type", content.ContentType.ToLower()),
+                    new HashEntry("score", content.Score),
+                    new HashEntry("publishedAt", content.PublishedAt.ToString("O")),
+                    new HashEntry("categories", JsonSerializer.Serialize(content.Categories ?? new List<string>())),
+                    new HashEntry("sourceProvider", content.SourceProvider),
+                    new HashEntry("metrics", JsonSerializer.Serialize(content.Metadata ?? new Dictionary<string, object>()))
+                };
+
+                _ = batch.HashSetAsync(key, hashEntries);
+                tasks.Add(batch.KeyExpireAsync(key, _defaultExpiration));
 
                 // Also update sorted set for score-based queries
                 // Using pre-calculated score from database
+                // Matches SearchService schema: searchcase:leaderboard:score:*
                 _ = batch.SortedSetAddAsync(
-                    "content:by_score",
+                    "searchcase:leaderboard:score:all",
                     content.Id,
                     content.Score);
 
-                // Update sorted set by type
+                // Update sorted set by type (matches SearchService schema)
                 _ = batch.SortedSetAddAsync(
-                    $"content:by_score:{content.ContentType.ToLower()}",
-                    content.Id,
-                    content.Score);
-
-                // Update by provider
-                _ = batch.SortedSetAddAsync(
-                    $"content:by_score:{content.SourceProvider.ToLower()}",
+                    $"searchcase:leaderboard:score:{content.ContentType.ToLower()}",
                     content.Id,
                     content.Score);
             }
@@ -138,12 +145,12 @@ public class RedisCacheService : ICacheService, IDisposable
         try
         {
             var key = $"{ContentKeyPrefix}{id}";
-            var json = await _database.StringGetAsync(key);
+            var hash = await _database.HashGetAllAsync(key);
 
-            if (json.IsNullOrEmpty)
+            if (hash.Length == 0)
                 return null;
 
-            return JsonSerializer.Deserialize<ContentEntity>(json!, _jsonOptions);
+            return DeserializeContentEntity(hash);
         }
         catch (Exception ex)
         {
@@ -159,15 +166,18 @@ public class RedisCacheService : ICacheService, IDisposable
 
         try
         {
-            var keys = ids.Select(id => (RedisKey)$"{ContentKeyPrefix}{id}").ToArray();
-            var values = await _database.StringGetAsync(keys);
+            var batch = _database.CreateBatch();
+            var tasks = ids.Select(id => batch.HashGetAllAsync($"{ContentKeyPrefix}{id}")).ToArray();
+
+            batch.Execute();
+            await Task.WhenAll(tasks);
 
             var contents = new List<ContentEntity>();
-            foreach (var value in values)
+            foreach (var task in tasks)
             {
-                if (!value.IsNullOrEmpty)
+                if (task.Result.Length > 0)
                 {
-                    var content = JsonSerializer.Deserialize<ContentEntity>(value!, _jsonOptions);
+                    var content = DeserializeContentEntity(task.Result);
                     if (content != null)
                         contents.Add(content);
                 }
@@ -190,7 +200,7 @@ public class RedisCacheService : ICacheService, IDisposable
             var removed = await _database.KeyDeleteAsync(key);
 
             // Also remove from sorted sets
-            await _database.SortedSetRemoveAsync("content:by_score", id);
+            await _database.SortedSetRemoveAsync("searchcase:leaderboard:score:all", id);
 
             return removed;
         }
@@ -236,7 +246,7 @@ public class RedisCacheService : ICacheService, IDisposable
 
             // Add current cache size
             var server = _redis.GetServer(_redis.GetEndPoints()[0]);
-            var keys = server.Keys(pattern: $"{ContentKeyPrefix}*").Count();
+            var keys = server.Keys(pattern: "searchcase:content:*").Count();
             result["cache_size"] = keys.ToString();
 
             return result;
@@ -258,7 +268,7 @@ public class RedisCacheService : ICacheService, IDisposable
 
             // Find all content-related keys using pattern matching
             var keys = new List<RedisKey>();
-            await foreach (var key in server.KeysAsync(pattern: "content:*"))
+            await foreach (var key in server.KeysAsync(pattern: "searchcase:*"))
             {
                 keys.Add(key);
 
@@ -276,9 +286,8 @@ public class RedisCacheService : ICacheService, IDisposable
                 await db.KeyDeleteAsync(keys.ToArray());
             }
 
-            // Also clear statistics and metadata keys
-            await db.KeyDeleteAsync("statistics:cache");
-            await db.KeyDeleteAsync("metadata:last_updated");
+            // Statistics and metadata keys are now included in searchcase:* pattern
+            // No need for separate deletion
 
             _logger.LogWarning("All cache cleared using pattern-based deletion");
             return true;
@@ -287,6 +296,38 @@ public class RedisCacheService : ICacheService, IDisposable
         {
             _logger.LogError(ex, "Failed to clear cache");
             return false;
+        }
+    }
+
+    private ContentEntity? DeserializeContentEntity(HashEntry[] hash)
+    {
+        try
+        {
+            var dict = hash.ToDictionary(
+                h => h.Name.ToString(),
+                h => h.Value.ToString()
+            );
+
+            return new ContentEntity
+            {
+                Id = dict["id"],
+                Title = dict["title"],
+                ContentType = dict["type"],
+                Score = double.Parse(dict["score"]),
+                PublishedAt = DateTimeOffset.Parse(dict["publishedAt"]),
+                Categories = dict.ContainsKey("categories")
+                    ? JsonSerializer.Deserialize<List<string>>(dict["categories"])
+                    : new List<string>(),
+                SourceProvider = dict["sourceProvider"],
+                Metadata = dict.ContainsKey("metrics")
+                    ? JsonSerializer.Deserialize<Dictionary<string, object>>(dict["metrics"])
+                    : new Dictionary<string, object>()
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to deserialize content entity from Redis hash");
+            return null;
         }
     }
 

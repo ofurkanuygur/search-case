@@ -1,5 +1,5 @@
-using CacheWorker.Events;
 using CacheWorker.Services;
+using EventBusContracts;
 using MassTransit;
 using Microsoft.Extensions.Logging;
 

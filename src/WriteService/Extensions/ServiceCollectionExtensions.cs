@@ -9,6 +9,7 @@ using WriteService.Data;
 using WriteService.Data.Repositories;
 using WriteService.Infrastructure.Jobs;
 using WriteService.Infrastructure.EventBus;
+using WriteService.Infrastructure.Scoring;
 
 namespace WriteService.Extensions;
 
@@ -38,6 +39,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IChangeDetectionService, ChangeDetectionService>();
         services.AddScoped<IScoreCalculationService, ScoreCalculationService>();
 
+        // Scoring Service (Case-specific formula)
+        services.AddScoped<IScoringService, CaseScoringService>();
+
         // Application Services - Change Detection (Strategy Pattern)
         services.AddScoped<IChangeDetectionStrategy, HashBasedChangeDetectionStrategy>();
 
@@ -60,7 +64,8 @@ public static class ServiceCollectionExtensions
 
         // Jobs
         services.AddScoped<ContentSyncJob>();
-        services.AddScoped<FreshnessScoreUpdateJob>();
+        services.AddScoped<FreshnessScoreUpdateJob>(); // Legacy - kept for backward compatibility
+        services.AddScoped<ContentScoreUpdateJob>(); // New: Full score recalculation with case formula
 
         // HTTP Clients with Polly
         var providerSettings = configuration.GetSection(ProviderSettings.SectionName).Get<ProviderSettings>()
