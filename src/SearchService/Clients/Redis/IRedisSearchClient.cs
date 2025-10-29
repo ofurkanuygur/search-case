@@ -9,12 +9,14 @@ namespace SearchService.Clients.Redis;
 public interface IRedisSearchClient
 {
     /// <summary>
-    /// Get top content by score
+    /// Get top content by score with optional score range filter
     /// </summary>
     Task<IReadOnlyList<ContentDto>> GetTopByScoreAsync(
         ContentType? type,
         int skip,
         int take,
+        double? minScore = null,
+        double? maxScore = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

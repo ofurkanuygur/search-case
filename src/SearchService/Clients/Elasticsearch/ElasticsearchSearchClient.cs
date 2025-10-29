@@ -109,29 +109,71 @@ public sealed class ElasticsearchSearchClient : IElasticsearchSearchClient
         }
 
         // Build boolean query with keyword search
-        var mustClauses = new List<Query>
+        // Use Should (OR) with multiple query types for better matching:
+        // 1. MultiMatch with fuzziness for full-text search
+        // 2. Prefix queries for partial matching (important for short queries like "ap")
+        var shouldClauses = new List<Query>
         {
+            // Full-text search with fuzziness (works well for 3+ characters)
             Query.MultiMatch(new MultiMatchQuery
             {
                 Query = request.Keyword,
                 Fields = new[] { new Field("title"), new Field("categories") },
                 Type = TextQueryType.BestFields,
                 Fuzziness = new Fuzziness("AUTO"),
-                Operator = Operator.Or
+                Operator = Operator.Or,
+                Boost = 2.0f // Higher boost for exact/fuzzy matches
+            }),
+
+            // Prefix matching for short queries (e.g., "ap" matches "apis")
+            Query.Prefix(new PrefixQuery(new Field("title"))
+            {
+                Value = request.Keyword.ToLowerInvariant(),
+                Boost = 1.5f
+            }),
+
+            // Prefix matching on categories too
+            Query.Prefix(new PrefixQuery(new Field("categories"))
+            {
+                Value = request.Keyword.ToLowerInvariant(),
+                Boost = 1.0f
             })
         };
+
+        var mustClauses = new List<Query>
+        {
+            Query.Bool(new BoolQuery
+            {
+                Should = shouldClauses,
+                MinimumShouldMatch = 1 // At least one of the should clauses must match
+            })
+        };
+
+        // Build filter clauses for type and score range
+        var filterClauses = new List<Query>();
 
         // Add type filter if specified
         if (request.Type.HasValue)
         {
-            var filterClauses = new List<Query>
+            filterClauses.Add(Query.Term(new TermQuery(new Field("contentType"))
             {
-                Query.Term(new TermQuery(new Field("contentType"))
-                {
-                    Value = request.Type.Value.ToString().ToLowerInvariant()
-                })
-            };
+                Value = request.Type.Value.ToString().ToLowerInvariant()
+            }));
+        }
 
+        // Add score range filter if specified
+        if (request.MinScore.HasValue || request.MaxScore.HasValue)
+        {
+            filterClauses.Add(Query.Range(new NumberRangeQuery(new Field("score"))
+            {
+                Gte = request.MinScore,
+                Lte = request.MaxScore
+            }));
+        }
+
+        // Return query with filters if any exist
+        if (filterClauses.Count > 0)
+        {
             return Query.Bool(new BoolQuery
             {
                 Must = mustClauses,

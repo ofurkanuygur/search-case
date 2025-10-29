@@ -33,6 +33,16 @@ public sealed record SearchRequest
     public int PageSize { get; init; } = 20;
 
     /// <summary>
+    /// Minimum score filter (optional)
+    /// </summary>
+    public double? MinScore { get; init; }
+
+    /// <summary>
+    /// Maximum score filter (optional)
+    /// </summary>
+    public double? MaxScore { get; init; }
+
+    /// <summary>
     /// Calculate query complexity for routing decisions
     /// </summary>
     public int ComplexityScore
@@ -43,6 +53,7 @@ public sealed record SearchRequest
             if (!string.IsNullOrWhiteSpace(Keyword)) score += 3;
             if (Type.HasValue) score += 1;
             if (Sort != SortBy.Score) score += 1;
+            if (MinScore.HasValue || MaxScore.HasValue) score += 1;
             return score;
         }
     }

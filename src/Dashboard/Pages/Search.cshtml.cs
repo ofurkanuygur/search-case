@@ -33,6 +33,12 @@ public class SearchModel : PageModel
     [BindProperty(SupportsGet = true)]
     public int PageSize { get; set; } = 20;
 
+    [BindProperty(SupportsGet = true)]
+    public double? MinScore { get; set; }
+
+    [BindProperty(SupportsGet = true)]
+    public double? MaxScore { get; set; }
+
     // Results
     public SearchResult? SearchResult { get; set; }
     public bool HasError { get; set; }
@@ -52,6 +58,8 @@ public class SearchModel : PageModel
                 sort: Sort,
                 page: CurrentPage,
                 pageSize: PageSize,
+                minScore: MinScore,
+                maxScore: MaxScore,
                 cancellationToken: cancellationToken);
 
             if (SearchResult == null)

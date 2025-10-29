@@ -27,15 +27,17 @@ public sealed class RedisSearchClient : IRedisSearchClient
         ContentType? type,
         int skip,
         int take,
+        double? minScore = null,
+        double? maxScore = null,
         CancellationToken cancellationToken = default)
     {
         var key = RedisKeySchema.ScoreLeaderboard(type);
 
-        // ZREVRANGE: Get members from sorted set in descending order (O(log(N)+M))
+        // ZREVRANGE: Get members from sorted set in descending order with score range (O(log(N)+M))
         var members = await Db.SortedSetRangeByScoreAsync(
             key: key,
-            start: double.NegativeInfinity,
-            stop: double.PositiveInfinity,
+            start: minScore ?? double.NegativeInfinity,
+            stop: maxScore ?? double.PositiveInfinity,
             exclude: Exclude.None,
             order: Order.Descending,
             skip: skip,

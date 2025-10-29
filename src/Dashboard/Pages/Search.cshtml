@@ -44,6 +44,43 @@
                             </select>
                         </div>
 
+                        <!-- Min Score Filter -->
+                        <div class="col-md-3">
+                            <label for="minScore" class="form-label">Min Score</label>
+                            <input type="number"
+                                   class="form-control"
+                                   id="minScore"
+                                   name="minScore"
+                                   value="@Model.MinScore"
+                                   placeholder="0"
+                                   step="0.1"
+                                   min="0">
+                        </div>
+
+                        <!-- Max Score Filter -->
+                        <div class="col-md-3">
+                            <label for="maxScore" class="form-label">Max Score</label>
+                            <input type="number"
+                                   class="form-control"
+                                   id="maxScore"
+                                   name="maxScore"
+                                   value="@Model.MaxScore"
+                                   placeholder="100"
+                                   step="0.1"
+                                   min="0">
+                        </div>
+
+                        <!-- Page Size -->
+                        <div class="col-md-3">
+                            <label for="pageSize" class="form-label">Items per Page</label>
+                            <select class="form-select" id="pageSize" name="pageSize">
+                                <option value="10" selected="@(Model.PageSize == 10)">10</option>
+                                <option value="20" selected="@(Model.PageSize == 20)">20</option>
+                                <option value="50" selected="@(Model.PageSize == 50)">50</option>
+                                <option value="100" selected="@(Model.PageSize == 100)">100</option>
+                            </select>
+                        </div>
+
                         <!-- Search Button -->
                         <div class="col-12">
                             <button type="submit" class="btn btn-primary">
@@ -171,7 +208,7 @@
                         <!-- Previous Button -->
                         <li class="page-item @(Model.CurrentPage <= 1 ? "disabled" : "")">
                             <a class="page-link"
-                               href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&page=@(Model.CurrentPage - 1)&pageSize=@Model.PageSize">
+                               href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&minScore=@Model.MinScore&maxScore=@Model.MaxScore&page=@(Model.CurrentPage - 1)&pageSize=@Model.PageSize">
                                 Previous
                             </a>
                         </li>
@@ -181,7 +218,7 @@
                         {
                             <li class="page-item @(pageNum == Model.CurrentPage ? "active" : "")">
                                 <a class="page-link"
-                                   href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&page=@pageNum&pageSize=@Model.PageSize">
+                                   href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&minScore=@Model.MinScore&maxScore=@Model.MaxScore&page=@pageNum&pageSize=@Model.PageSize">
                                     @pageNum
                                 </a>
                             </li>
@@ -190,7 +227,7 @@
                         <!-- Next Button -->
                         <li class="page-item @(Model.CurrentPage >= Model.GetTotalPages() ? "disabled" : "")">
                             <a class="page-link"
-                               href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&page=@(Model.CurrentPage + 1)&pageSize=@Model.PageSize">
+                               href="?keyword=@Model.Keyword&type=@Model.Type&sort=@Model.Sort&minScore=@Model.MinScore&maxScore=@Model.MaxScore&page=@(Model.CurrentPage + 1)&pageSize=@Model.PageSize">
                                 Next
                             </a>
                         </li>

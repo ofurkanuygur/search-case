@@ -52,11 +52,13 @@ public sealed class RedisSearchStrategy : ISearchStrategy
         {
             var skip = (request.Page - 1) * request.PageSize;
 
-            // Get content from Redis sorted set
+            // Get content from Redis sorted set with score range filter
             var items = await _redisClient.GetTopByScoreAsync(
                 request.Type,
                 skip,
                 request.PageSize,
+                request.MinScore,
+                request.MaxScore,
                 cancellationToken
             );
 

@@ -4,14 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SearchCase is a microservices-based content aggregation system that fetches data from multiple external providers, transforms it into a canonical format, and orchestrates operations using Hangfire worker service. The system consists of:
+SearchCase is a microservices-based content aggregation system that fetches data from multiple external providers, transforms it into a canonical format, performs change detection, and provides full-text search capabilities with event-driven architecture. The system consists of:
 
-1. **HangfireWorker** - Background job scheduler and orchestrator (ASP.NET Core 8.0)
-2. **JsonProviderMicroservice** - JSON provider integration (.NET 9.0)
-3. **XmlProviderMicroservice** - XML provider integration (.NET 9.0)
-4. **SearchCase.Contracts** - Shared contracts and canonical data models (.NET 9.0)
-5. **WriteService** - New content synchronization service with change detection (ASP.NET Core 9.0)
-6. **PostgreSQL** - Database for Hangfire job storage, content persistence, and audit logs
+### Microservices Layer
+1. **JsonProviderMicroservice** - JSON provider integration (.NET 9.0, Port 8001)
+2. **XmlProviderMicroservice** - XML provider integration (.NET 9.0, Port 8002)
+3. **WriteService** - Content synchronization with change detection (ASP.NET Core 9.0, Port 8003)
+4. **EventBusService** - REST API wrapper for RabbitMQ (ASP.NET Core 8.0, Port 8004)
+5. **SearchWorker** - RabbitMQ consumer and Elasticsearch indexer (ASP.NET Core 8.0, Port 8005)
+6. **CacheWorker** - Redis caching service (ASP.NET Core 8.0, Port 8006)
+7. **SearchService** - Search API with Elasticsearch/Redis (ASP.NET Core 8.0, Port 8007)
+8. **Dashboard** - Web UI for search (ASP.NET Core Razor Pages, Port 8008)
+9. **HangfireWorker** - Legacy background job scheduler (ASP.NET Core 8.0, Port 5100) - Being deprecated
+
+### Shared Libraries
+- **SearchCase.Contracts** - Canonical data models and provider contracts (.NET 9.0)
+- **SearchCase.Search.Contracts** - Search-specific DTOs and validators (.NET 8.0)
+
+### Infrastructure
+- **PostgreSQL** (Port 5433) - Primary database (hangfire, searchcase schemas)
+- **RabbitMQ** (Ports 5672/15672) - Message broker
+- **Elasticsearch** (Port 9200) - Full-text search engine
+- **Kibana** (Port 5601) - Elasticsearch visualization
+- **Redis** (Port 6379) - Caching layer
 
 ## Architecture
 
@@ -88,6 +103,91 @@ WriteService is the primary content synchronization service that orchestrates th
 - `contents` - Main content storage
 - `content_change_logs` - Audit trail of all changes
 - `sync_batches` - Tracks synchronization operations
+
+### Event-Driven Architecture
+
+#### EventBusService (Port 8004)
+REST API wrapper for RabbitMQ event publishing:
+- **POST /api/events/content-changed**: Publishes batch content change events
+- Circuit breaker pattern with Polly for resilience
+- Publishes to RabbitMQ exchange: `content-events`
+- Routing key: `content.changed`
+
+#### SearchWorker (Port 8005)
+Background worker that consumes RabbitMQ messages and indexes to Elasticsearch:
+- Consumes from queue: `content-changed-queue`
+- Batch indexing for performance (configurable batch size)
+- Error handling with dead letter queue (DLQ)
+- Automatic index creation and mapping
+- Health checks for RabbitMQ and Elasticsearch connectivity
+
+**Event Flow:**
+```
+WriteService → EventBusService → RabbitMQ → SearchWorker → Elasticsearch
+```
+
+#### CacheWorker (Port 8006)
+Redis caching service for hot data:
+- Consumes `content-batch-updated` events from RabbitMQ
+- Updates Redis cache with latest content
+- Key schema: `content:{contentId}`
+- TTL-based expiration
+- Cache invalidation on updates
+
+### Search Architecture
+
+#### SearchService (Port 8007)
+Unified search API with multiple strategies:
+
+**Search Strategies (Strategy Pattern):**
+1. **ElasticsearchSearchStrategy**: Full-text search with advanced queries
+2. **RedisSearchStrategy**: Fast cache lookups for hot content
+3. **HybridSearchStrategy**: Combines both (checks Redis first, falls back to Elasticsearch)
+
+**Endpoints:**
+- `GET /api/search`: Search with filters (query, type, categories, sort, pagination)
+- Supports sorting by relevance, date, or score
+- Pagination with page/pageSize
+- Returns: SearchResult with items, pagination, and metadata
+
+**Key Features:**
+- Strategy pattern for flexible search implementations
+- FluentValidation for request validation
+- Circuit breaker for Elasticsearch
+- Response caching
+
+#### SearchCase.Search.Contracts
+Shared library for search operations:
+- **DTOs**: `SearchRequest`, `SearchResult`, `ContentDto`
+- **Enums**: `ContentType`, `SortBy`
+- **Validators**: `SearchRequestValidator` with FluentValidation
+- Used by both SearchService and Dashboard
+
+#### Dashboard (Port 8008)
+ASP.NET Core Razor Pages web UI:
+- Search interface with filters
+- Bootstrap responsive design
+- Real-time search via SearchService API
+- Displays results with pagination
+- Categories and content type filtering
+
+**Pages:**
+- `/` - Homepage
+- `/Search` - Search interface
+- Uses `ISearchServiceClient` to communicate with SearchService
+
+## Data Flow Overview
+
+```
+1. Providers (JSON/XML) → Fetch external data
+2. WriteService → Sync, detect changes, save to PostgreSQL
+3. WriteService → Publish events to EventBusService
+4. EventBusService → Forward to RabbitMQ
+5. SearchWorker → Consume events, index to Elasticsearch
+6. CacheWorker → Consume events, update Redis cache
+7. SearchService → Query Elasticsearch/Redis via strategies
+8. Dashboard → Display search results to users
+```
 
 ## Common Commands
 
@@ -174,16 +274,26 @@ cd src/HangfireWorker && dotnet run
 
 ## Service Endpoints
 
-| Service | Port | Key Endpoints |
-|---------|------|---------------|
-| **Hangfire Worker** | 5100 | `/hangfire` (dashboard), `/health` (not running by default) |
-| **WriteService** | 8003 | `/hangfire` (dashboard), `/health`, `/api/content` |
-| **JSON Provider** | 8001 | `/api/provider/data`, `/swagger`, `/health` |
-| **XML Provider** | 8002 | `/api/provider/data`, `/swagger`, `/health` |
-| **PostgreSQL** | 5433 | Databases: `hangfire`, `searchcase` |
-| **pgAdmin** | 5050 | Web interface (profile: tools) |
+| Service | Port | Key Endpoints | Description |
+|---------|------|---------------|-------------|
+| **JSON Provider** | 8001 | `/api/provider/data`, `/swagger`, `/health` | Fetches and transforms JSON data |
+| **XML Provider** | 8002 | `/api/provider/data`, `/swagger`, `/health` | Fetches and transforms XML data |
+| **WriteService** | 8003 | `/hangfire`, `/health`, `/api/content`, `/api/test` | Content sync with Hangfire |
+| **EventBusService** | 8004 | `/api/events/content-changed`, `/health` | RabbitMQ event publisher |
+| **SearchWorker** | 8005 | `/health`, background consumer | RabbitMQ → Elasticsearch indexer |
+| **CacheWorker** | 8006 | `/health`, background consumer | Redis caching service |
+| **SearchService** | 8007 | `/api/search`, `/health`, `/swagger` | Search API (Elasticsearch/Redis) |
+| **Dashboard** | 8008 | `/`, `/Search` | Web UI for search |
+| **Hangfire Worker** | 5100 | `/hangfire`, `/health` | Legacy (not running by default) |
+| **PostgreSQL** | 5433 | Databases: `hangfire`, `searchcase` | Primary database |
+| **RabbitMQ** | 5672 | AMQP protocol | Message broker |
+| **RabbitMQ Management** | 15672 | Web UI (guest/guest) | Queue management |
+| **Elasticsearch** | 9200 | REST API | Search engine |
+| **Kibana** | 5601 | Web UI | Elasticsearch visualization |
+| **Redis** | 6379 | Redis protocol | Cache store |
+| **pgAdmin** | 5050 | Web UI (admin@searchcase.local/admin123) | Database management (profile: tools) |
 
-Note: Port 5433 is used to avoid conflicts with local PostgreSQL installations (default 5432).
+**Note:** Port 5433 is used for PostgreSQL to avoid conflicts with local installations (default 5432).
 
 ## Key Configuration Patterns
 

@@ -13,5 +13,7 @@ public interface ISearchServiceClient
         string? sort = null,
         int page = 1,
         int pageSize = 20,
+        double? minScore = null,
+        double? maxScore = null,
         CancellationToken cancellationToken = default);
 }

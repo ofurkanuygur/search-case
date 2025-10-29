@@ -24,6 +24,8 @@ public sealed class SearchServiceClient : ISearchServiceClient
         string? sort = null,
         int page = 1,
         int pageSize = 20,
+        double? minScore = null,
+        double? maxScore = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -42,6 +44,12 @@ public sealed class SearchServiceClient : ISearchServiceClient
 
             queryParams["page"] = page.ToString();
             queryParams["pageSize"] = pageSize.ToString();
+
+            if (minScore.HasValue)
+                queryParams["minScore"] = minScore.Value.ToString();
+
+            if (maxScore.HasValue)
+                queryParams["maxScore"] = maxScore.Value.ToString();
 
             var queryString = queryParams.ToString();
             var requestUri = $"/api/search?{queryString}";

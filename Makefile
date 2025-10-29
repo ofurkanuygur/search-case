@@ -1,4 +1,4 @@
-.PHONY: help build up down logs clean restart health dashboard
+.PHONY: help build up down logs clean restart health dashboard clean-data clean-redis clean-elasticsearch clean-db
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -80,3 +80,31 @@ dotnet-build: ## Build .NET solution
 dotnet-clean: ## Clean .NET build artifacts
 	dotnet clean SearchCase.sln
 	find . -type d -name "bin" -o -name "obj" | xargs rm -rf
+
+## Data Cleaning Commands
+
+clean-redis: ## Clear all Redis data
+	@echo "Clearing Redis..."
+	@docker exec searchcase-redis redis-cli FLUSHDB
+	@echo "✅ Redis cleared"
+
+clean-elasticsearch: ## Delete all Elasticsearch indices
+	@echo "Deleting Elasticsearch indices..."
+	@curl -X DELETE "http://localhost:9200/content-index" 2>/dev/null || true
+	@echo ""
+	@echo "✅ Elasticsearch indices deleted"
+
+clean-db: ## Truncate all PostgreSQL tables (Hangfire jobs + Content data)
+	@echo "⚠️  WARNING: This will delete all data from PostgreSQL!"
+	@echo "Cleaning Hangfire jobs..."
+	@docker exec search-db psql -U postgres -d hangfire -c "TRUNCATE TABLE hangfire.job, hangfire.state, hangfire.jobparameter, hangfire.jobqueue CASCADE;" 2>/dev/null || true
+	@echo "Cleaning content data..."
+	@docker exec search-db psql -U postgres -d searchcase -c "TRUNCATE TABLE contents CASCADE;" 2>/dev/null || true
+	@echo "✅ PostgreSQL tables truncated"
+
+clean-data: clean-redis clean-elasticsearch clean-db ## Clean all data (Redis + Elasticsearch + PostgreSQL)
+	@echo ""
+	@echo "✅ All data cleaned successfully!"
+	@echo "   - Redis: Flushed"
+	@echo "   - Elasticsearch: Indices deleted"
+	@echo "   - PostgreSQL: Tables truncated"

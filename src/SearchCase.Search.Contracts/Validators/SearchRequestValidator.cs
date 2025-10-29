@@ -30,5 +30,20 @@ public sealed class SearchRequestValidator : AbstractValidator<SearchRequest>
             .MaximumLength(200)
             .WithMessage("Keyword must not exceed 200 characters")
             .When(x => !string.IsNullOrWhiteSpace(x.Keyword));
+
+        RuleFor(x => x.MinScore)
+            .GreaterThanOrEqualTo(0)
+            .WithMessage("MinScore must be greater than or equal to 0")
+            .When(x => x.MinScore.HasValue);
+
+        RuleFor(x => x.MaxScore)
+            .GreaterThanOrEqualTo(0)
+            .WithMessage("MaxScore must be greater than or equal to 0")
+            .When(x => x.MaxScore.HasValue);
+
+        RuleFor(x => x)
+            .Must(x => !x.MinScore.HasValue || !x.MaxScore.HasValue || x.MinScore <= x.MaxScore)
+            .WithMessage("MinScore must be less than or equal to MaxScore")
+            .When(x => x.MinScore.HasValue && x.MaxScore.HasValue);
     }
 }
