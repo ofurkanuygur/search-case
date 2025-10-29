@@ -25,14 +25,21 @@ graph TD
         RMQ[RabbitMQ<br/>:5672/15672]
     end
 
-    subgraph Search Layer
+    subgraph Workers
         SW[SearchWorker<br/>:8005]
-        ES[Elasticsearch<br/>:9200]
-        KB[Kibana<br/>:5601]
+        CW[CacheWorker<br/>:8006]
+    end
+
+    subgraph Search & UI Layer
+        SS[SearchService<br/>:8007<br/>Strategy Pattern]
+        DB[Dashboard<br/>:8008<br/>Web UI]
     end
 
     subgraph Storage
-        PG[(PostgreSQL<br/>:5433<br/>hangfire/searchcase)]
+        PG[(PostgreSQL<br/>:5433)]
+        ES[(Elasticsearch<br/>:9200)]
+        RD[(Redis<br/>:6379)]
+        KB[Kibana<br/>:5601]
     end
 
     API1 --> JP
@@ -43,8 +50,13 @@ graph TD
     WS --> EB
     EB --> RMQ
     RMQ --> SW
+    RMQ --> CW
     SW --> ES
+    CW --> RD
     ES --> KB
+    SS --> ES
+    SS --> RD
+    DB --> SS
 ```
 
 ## 🚀 Quick Start
@@ -76,11 +88,13 @@ docker-compose logs -f
 
 | Service | URL | Description |
 |---------|-----|-------------|
+| **Dashboard (UI)** | http://localhost:8008 | End-user search interface |
 | **Hangfire Dashboard** | http://localhost:8003/hangfire | Background job monitoring |
-| **RabbitMQ Management** | http://localhost:15672 | Message queue dashboard (guest/guest) |
-| **Kibana** | http://localhost:5601 | Elasticsearch visualization |
+| **SearchService API** | http://localhost:8007/swagger | Search API documentation |
 | **JSON Provider Swagger** | http://localhost:8001/swagger | JSON Provider API docs |
 | **XML Provider Swagger** | http://localhost:8002/swagger | XML Provider API docs |
+| **RabbitMQ Management** | http://localhost:15672 | Message queue dashboard (guest/guest) |
+| **Kibana** | http://localhost:5601 | Elasticsearch visualization |
 | **pgAdmin** | http://localhost:5050 | Database management (admin@searchcase.local/admin123) |
 
 ## 🔧 Services Description
@@ -116,12 +130,37 @@ docker-compose logs -f
 - Indexes content to Elasticsearch
 - Bulk indexing for performance
 - Automatic index management
+- Dead letter queue (DLQ) for failed messages
 
-### 5. **Infrastructure Services**
-- **PostgreSQL** (Port 5433): Stores content and Hangfire jobs
-- **RabbitMQ** (Ports 5672/15672): Message broker
+### 5. **CacheWorker** (Port 8006)
+- Redis caching service
+- Consumes content update events from RabbitMQ
+- Cache invalidation strategy
+- TTL-based expiration
+- Key schema: `content:{contentId}`
+
+### 6. **SearchService** (Port 8007)
+- Unified search API with Strategy Pattern
+- **ElasticsearchSearchStrategy**: Full-text search
+- **RedisSearchStrategy**: Fast cache lookups
+- **HybridSearchStrategy**: Combines both approaches
+- FluentValidation for request validation
+- Pagination and sorting support
+- Circuit breaker for Elasticsearch
+
+### 7. **Dashboard** (Port 8008)
+- ASP.NET Core Razor Pages web UI
+- Search interface with filters
+- Bootstrap responsive design
+- Real-time search results
+- Category and content type filtering
+
+### 8. **Infrastructure Services**
+- **PostgreSQL** (Port 5433): Primary database (hangfire, searchcase schemas)
+- **RabbitMQ** (Ports 5672/15672): Message broker with management UI
 - **Elasticsearch** (Port 9200): Full-text search engine
-- **Kibana** (Port 5601): Search visualization
+- **Kibana** (Port 5601): Search data visualization
+- **Redis** (Port 6379): High-performance caching layer
 
 ## 📊 Data Flow
 
@@ -133,8 +172,53 @@ docker-compose logs -f
 5. Changed content is saved to PostgreSQL
 6. Events are published to EventBus → RabbitMQ
 7. SearchWorker consumes messages and indexes to Elasticsearch
-8. Users can search via Kibana
+8. CacheWorker consumes messages and updates Redis cache
+9. SearchService queries Elasticsearch/Redis with strategy pattern
+10. Dashboard displays search results to end users
 ```
+
+## 🏛️ Architecture Decisions
+
+### Why Microservices?
+- **Independent Scaling**: Scale JSON Provider separately if it receives 10x traffic
+- **Fault Isolation**: XML Provider failure doesn't affect JSON Provider
+- **Technology Diversity**: Each service can use optimal tech stack
+- **Team Autonomy**: Different teams can work on different services
+- **Deployment Independence**: Deploy bug fixes without affecting other services
+
+### Why Event-Driven Architecture?
+- **Asynchronous Processing**: Non-blocking operations for better performance
+- **Loose Coupling**: Services don't need to know about each other
+- **Scalability**: Add more consumers when message volume increases
+- **Reliability**: Messages persisted in RabbitMQ until consumed
+- **Audit Trail**: Complete event log for debugging and compliance
+
+### Why Strategy Pattern for Search?
+- **Flexibility**: Switch between Elasticsearch/Redis/Hybrid at runtime
+- **Performance**: Use Redis for hot data, Elasticsearch for complex queries
+- **Testability**: Easy to mock strategies for unit tests
+- **Extensibility**: Add new strategies (e.g., AI-powered search) without changing existing code
+
+### Technology Stack Decisions
+
+| Technology | Why Chosen | Alternatives Considered |
+|------------|------------|------------------------|
+| **.NET 8.0/9.0** | High performance, cross-platform, mature ecosystem | Node.js, Java Spring Boot |
+| **PostgreSQL** | ACID compliance, JSONB support, proven reliability | MongoDB, SQL Server |
+| **RabbitMQ** | Battle-tested, excellent .NET support, reliable | Kafka, Azure Service Bus |
+| **Elasticsearch** | Superior full-text search, scalable, rich querying | Azure Cognitive Search, Solr |
+| **Redis** | Blazing fast, simple API, wide adoption | Memcached, Hazelcast |
+| **Docker** | Environment consistency, easy deployment | Kubernetes (overkill for this scale) |
+| **Hangfire** | .NET-native, persistent jobs, great UI | Quartz.NET, Azure Functions |
+
+### Design Patterns Used
+1. **Repository Pattern**: Data access abstraction
+2. **Strategy Pattern**: Search implementations
+3. **Circuit Breaker**: Fault tolerance (Polly)
+4. **CQRS Lite**: Separate read (SearchService) and write (WriteService) paths
+5. **Canonical Data Model**: Unified data format across services
+6. **Saga Pattern**: Distributed transaction handling (via events)
+7. **Outbox Pattern**: Reliable event publishing
 
 ## 🗄️ Database Schema
 
