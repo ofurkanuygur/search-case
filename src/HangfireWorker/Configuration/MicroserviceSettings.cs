@@ -7,13 +7,17 @@ public sealed class MicroserviceSettings
 {
     public const string SectionName = "Microservices";
 
-    public MicroserviceConfig ServiceA { get; set; } = new();
-    public MicroserviceConfig ServiceB { get; set; } = new();
+    public MicroserviceConfig SyncJobService { get; set; } = new();
+    public MicroserviceConfig DailyJobService { get; set; } = new();
+    public MicroserviceConfig TimeService { get; set; } = new();
+    public MicroserviceConfig WriteService { get; set; } = new();
 
     public void Validate()
     {
-        ServiceA.Validate(nameof(ServiceA));
-        ServiceB.Validate(nameof(ServiceB));
+        SyncJobService.Validate(nameof(SyncJobService));
+        DailyJobService.Validate(nameof(DailyJobService));
+        TimeService.Validate(nameof(TimeService));
+        WriteService.Validate(nameof(WriteService));
     }
 }
 
