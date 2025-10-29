@@ -423,6 +423,54 @@ services:
           cpus: '0.25'
           memory: 256M
 
+  # Time Service - Daily Score Recalculation Service
+  time-service:
+    build:
+      context: .
+      dockerfile: ./src/TimeService/Dockerfile
+    container_name: searchcase-time-service
+    depends_on:
+      search-db:
+        condition: service_healthy
+      eventbus-service:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__WriteServiceDb=Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres};Pooling=true;MinPoolSize=2;MaxPoolSize=20
+      - EventBus__BaseUrl=http://eventbus-service:8080
+      - EventBus__TimeoutSeconds=30
+      - EventBus__RetryCount=3
+      - EventBus__RetryDelaySeconds=2
+      - EventBus__CircuitBreakerThreshold=3
+      - EventBus__CircuitBreakerDurationSeconds=30
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8007:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
   # Hangfire Worker Service (Original - to be deprecated)
   hangfire-worker:
     build:
@@ -449,6 +497,8 @@ services:
       - Microservices__SyncJobService__TimeoutSeconds=300
       - Microservices__DailyJobService__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
       - Microservices__DailyJobService__TimeoutSeconds=300
+      - Microservices__TimeService__BaseUrl=http://time-service:8080
+      - Microservices__TimeService__TimeoutSeconds=300
       - Logging__LogLevel__Default=Information
       - Logging__LogLevel__Hangfire=Information
       - TZ=UTC

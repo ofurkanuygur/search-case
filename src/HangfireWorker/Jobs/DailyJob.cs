@@ -19,27 +19,22 @@ public sealed class DailyJob : BaseJob
 
     protected override async Task ExecuteJobAsync(CancellationToken cancellationToken)
     {
-        Logger.LogInformation("Executing DailyJob - triggering DailyJobService");
+        Logger.LogInformation("Executing DailyJob - triggering TimeService for daily score updates");
 
-        // Prepare payload with daily job metadata
-        var payload = new
-        {
-            JobName = "DailyJob",
-            TriggeredAt = DateTime.UtcNow,
-            ExecutionId = Guid.NewGuid(),
-            Date = DateOnly.FromDateTime(DateTime.UtcNow),
-            Message = "Daily scheduled execution from Hangfire"
-        };
-
-        // Trigger DailyJobService
+        // Trigger TimeService to update scores for content crossing freshness thresholds
+        // TimeService will:
+        // 1. Fetch content published exactly 7, 30, or 90 days ago (threshold optimization)
+        // 2. Recalculate scores using freshness + engagement formulas
+        // 3. Bulk update database
+        // 4. Publish ContentBatchUpdatedEvent to EventBus → CacheWorker + SearchWorker
         var response = await _microserviceClient.TriggerAsync(
-            serviceName: "DailyJobService",
-            endpoint: "/api/process",
-            payload: payload,
+            serviceName: "TimeService",
+            endpoint: "/api/time/update-daily",
+            payload: null, // No payload needed - TimeService determines threshold dates internally
             cancellationToken: cancellationToken);
 
         Logger.LogInformation(
-            "DailyJob completed. DailyJobService response: {Response}",
+            "DailyJob completed. TimeService daily score update response: {Response}",
             response);
     }
 

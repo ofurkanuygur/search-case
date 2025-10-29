@@ -105,17 +105,19 @@ public sealed class FreshnessScoreUpdateJob
                         "Updating {Count} scores at {Days}-day boundary",
                         toUpdate.Count, boundaryDays);
 
-                    var bulkResult = await _bulkRepository.BulkUpsertWithBatchingAsync(
+                    // Use BulkUpdateScoresAsync instead of BulkUpsertWithBatchingAsync
+                    // This ensures updated_at is always updated, regardless of content_hash
+                    var bulkResult = await _bulkRepository.BulkUpdateScoresAsync(
                         toUpdate,
-                        batchSize: 0, // Auto-calculate
                         cancellationToken);
 
                     if (bulkResult.IsSuccess)
                     {
                         updatedCount += toUpdate.Count;
                         _logger.LogInformation(
-                            "Successfully updated {Count} scores",
-                            toUpdate.Count);
+                            "Successfully updated {Count} scores (rows affected: {Rows})",
+                            toUpdate.Count,
+                            bulkResult.RowsAffected);
                     }
                     else
                     {

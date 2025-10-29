@@ -48,6 +48,28 @@ public static class ServiceCollectionExtensions
         .AddPolicyHandler(GetRetryPolicy(settings.DailyJobService))
         .AddPolicyHandler(GetCircuitBreakerPolicy(settings.DailyJobService));
 
+        // Add TimeService HTTP Client with resilience
+        services.AddHttpClient("TimeService", client =>
+        {
+            client.BaseAddress = new Uri(settings.TimeService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(settings.TimeService.TimeoutSeconds);
+            client.DefaultRequestHeaders.Add("User-Agent", "HangfireWorker/1.0");
+            client.DefaultRequestHeaders.Add("X-Service-Name", "HangfireWorker");
+        })
+        .AddPolicyHandler(GetRetryPolicy(settings.TimeService))
+        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.TimeService));
+
+        // Add WriteService HTTP Client with resilience
+        services.AddHttpClient("WriteService", client =>
+        {
+            client.BaseAddress = new Uri(settings.WriteService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(settings.WriteService.TimeoutSeconds);
+            client.DefaultRequestHeaders.Add("User-Agent", "HangfireWorker/1.0");
+            client.DefaultRequestHeaders.Add("X-Service-Name", "HangfireWorker");
+        })
+        .AddPolicyHandler(GetRetryPolicy(settings.WriteService))
+        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.WriteService));
+
         return services;
     }
 
