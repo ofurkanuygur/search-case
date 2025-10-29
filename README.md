@@ -489,20 +489,3 @@ dotnet test src/WriteService.IntegrationTests
 3. Make your changes
 4. Run tests
 5. Submit a pull request
-
-## 📄 License
-
-This project is proprietary to SearchCase.
-
-## 📞 Support
-
-For issues and questions:
-- Check the [CLAUDE.md](./CLAUDE.md) file for detailed technical guidance
-- Review logs in `/logs` directory
-- Check service health endpoints
-
----
-
-**Last Updated**: October 2024
-**Version**: 2.0.0
-**Maintainer**: SearchCase Team
