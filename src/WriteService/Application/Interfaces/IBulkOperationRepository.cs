@@ -42,6 +42,14 @@ public interface IBulkOperationRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Updates only scores for existing content (for FreshnessScoreUpdateJob)
+    /// Does not check content_hash, always updates score and updated_at
+    /// </summary>
+    Task<BulkOperationResult> BulkUpdateScoresAsync(
+        IEnumerable<ContentEntity> contents,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Saves change logs for audit trail
     /// </summary>
     Task SaveChangeLogsAsync(

@@ -8,6 +8,7 @@ using WriteService.Configuration;
 using WriteService.Data;
 using WriteService.Data.Repositories;
 using WriteService.Infrastructure.Jobs;
+using WriteService.Infrastructure.EventBus;
 
 namespace WriteService.Extensions;
 
@@ -41,7 +42,21 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IChangeDetectionStrategy, HashBasedChangeDetectionStrategy>();
 
         // Application Services - Orchestration
-        services.AddScoped<ContentSyncOrchestrator>();
+        services.AddScoped<ContentSyncOrchestrator>(provider =>
+        {
+            var changeDetectionStrategy = provider.GetRequiredService<IChangeDetectionStrategy>();
+            var bulkRepository = provider.GetRequiredService<IBulkOperationRepository>();
+            var contentRepository = provider.GetRequiredService<IContentRepository>();
+            var logger = provider.GetRequiredService<ILogger<ContentSyncOrchestrator>>();
+            var eventBusClient = provider.GetRequiredService<IEventBusClient>(); // Now required
+
+            return new ContentSyncOrchestrator(
+                changeDetectionStrategy,
+                bulkRepository,
+                contentRepository,
+                logger,
+                eventBusClient);
+        });
 
         // Jobs
         services.AddScoped<ContentSyncJob>();
@@ -63,6 +78,17 @@ public static class ServiceCollectionExtensions
         {
             client.BaseAddress = new Uri(providerSettings.XmlProvider.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(providerSettings.XmlProvider.TimeoutSeconds);
+        })
+        .AddPolicyHandler(GetRetryPolicy())
+        .AddPolicyHandler(GetCircuitBreakerPolicy());
+
+        // EventBus Client with Circuit Breaker
+        services.AddHttpClient<IEventBusClient, EventBusClient>("EventBus", client =>
+        {
+            var eventBusUrl = configuration["EventBus:BaseUrl"] ?? "http://localhost:5200";
+            client.BaseAddress = new Uri(eventBusUrl);
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.Add("User-Agent", "WriteService");
         })
         .AddPolicyHandler(GetRetryPolicy())
         .AddPolicyHandler(GetCircuitBreakerPolicy());

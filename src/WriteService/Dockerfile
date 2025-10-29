@@ -6,11 +6,13 @@ WORKDIR /src
 
 # Copy solution and project files
 COPY src/SearchCase.Contracts/SearchCase.Contracts.csproj ./SearchCase.Contracts/
+COPY src/EventBusContracts/EventBusContracts.csproj ./EventBusContracts/
 COPY src/WriteService/WriteService.csproj ./WriteService/
 RUN dotnet restore "./WriteService/WriteService.csproj"
 
 # Copy source code
 COPY src/SearchCase.Contracts/ ./SearchCase.Contracts/
+COPY src/EventBusContracts/ ./EventBusContracts/
 COPY src/WriteService/ ./WriteService/
 
 # Build and publish

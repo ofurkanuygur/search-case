@@ -26,27 +26,49 @@ public static class ServiceCollectionExtensions
         // Register IMicroserviceClient
         services.AddScoped<IMicroserviceClient, MicroserviceClient>();
 
-        // Add Service A HTTP Client with resilience
-        services.AddHttpClient("ServiceA", client =>
+        // Add SyncJobService HTTP Client with resilience
+        services.AddHttpClient("SyncJobService", client =>
         {
-            client.BaseAddress = new Uri(settings.ServiceA.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(settings.ServiceA.TimeoutSeconds);
+            client.BaseAddress = new Uri(settings.SyncJobService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(settings.SyncJobService.TimeoutSeconds);
             client.DefaultRequestHeaders.Add("User-Agent", "HangfireWorker/1.0");
             client.DefaultRequestHeaders.Add("X-Service-Name", "HangfireWorker");
         })
-        .AddPolicyHandler(GetRetryPolicy(settings.ServiceA))
-        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.ServiceA));
+        .AddPolicyHandler(GetRetryPolicy(settings.SyncJobService))
+        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.SyncJobService));
 
-        // Add Service B HTTP Client with resilience
-        services.AddHttpClient("ServiceB", client =>
+        // Add DailyJobService HTTP Client with resilience
+        services.AddHttpClient("DailyJobService", client =>
         {
-            client.BaseAddress = new Uri(settings.ServiceB.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(settings.ServiceB.TimeoutSeconds);
+            client.BaseAddress = new Uri(settings.DailyJobService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(settings.DailyJobService.TimeoutSeconds);
             client.DefaultRequestHeaders.Add("User-Agent", "HangfireWorker/1.0");
             client.DefaultRequestHeaders.Add("X-Service-Name", "HangfireWorker");
         })
-        .AddPolicyHandler(GetRetryPolicy(settings.ServiceB))
-        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.ServiceB));
+        .AddPolicyHandler(GetRetryPolicy(settings.DailyJobService))
+        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.DailyJobService));
+
+        // Add TimeService HTTP Client with resilience
+        services.AddHttpClient("TimeService", client =>
+        {
+            client.BaseAddress = new Uri(settings.TimeService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(settings.TimeService.TimeoutSeconds);
+            client.DefaultRequestHeaders.Add("User-Agent", "HangfireWorker/1.0");
+            client.DefaultRequestHeaders.Add("X-Service-Name", "HangfireWorker");
+        })
+        .AddPolicyHandler(GetRetryPolicy(settings.TimeService))
+        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.TimeService));
+
+        // Add WriteService HTTP Client with resilience
+        services.AddHttpClient("WriteService", client =>
+        {
+            client.BaseAddress = new Uri(settings.WriteService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(settings.WriteService.TimeoutSeconds);
+            client.DefaultRequestHeaders.Add("User-Agent", "HangfireWorker/1.0");
+            client.DefaultRequestHeaders.Add("X-Service-Name", "HangfireWorker");
+        })
+        .AddPolicyHandler(GetRetryPolicy(settings.WriteService))
+        .AddPolicyHandler(GetCircuitBreakerPolicy(settings.WriteService));
 
         return services;
     }

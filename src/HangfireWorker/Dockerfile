@@ -6,13 +6,14 @@ ARG BUILDCONFIG=Release
 WORKDIR /src
 
 # Copy csproj and restore dependencies (layer caching)
-COPY ["HangfireWorker.csproj", "./"]
-RUN dotnet restore "HangfireWorker.csproj"
+COPY ["src/HangfireWorker/HangfireWorker.csproj", "src/HangfireWorker/"]
+RUN dotnet restore "src/HangfireWorker/HangfireWorker.csproj"
 
 # Copy source code
-COPY . .
+COPY ["src/HangfireWorker/", "src/HangfireWorker/"]
 
 # Build and publish in one step
+WORKDIR "/src/src/HangfireWorker"
 RUN dotnet publish "HangfireWorker.csproj" \
     -c $BUILDCONFIG \
     -o /app/publish \

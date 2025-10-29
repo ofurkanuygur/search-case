@@ -1,278 +1,424 @@
-# SearchCase - Hangfire Worker Service
+# SearchCase - Microservices Content Aggregation System
 
-Production-ready Hangfire Worker Service for scheduling and executing background jobs that trigger microservices.
+A production-ready microservices-based content aggregation platform that fetches data from multiple external providers, transforms it into a canonical format, performs change detection, and orchestrates operations using Hangfire background jobs with event-driven architecture.
 
-## Architecture
+## 🏗️ Architecture Overview
 
+```mermaid
+graph TD
+    subgraph External Sources
+        API1[External API 1 - JSON]
+        API2[External API 2 - XML]
+    end
+
+    subgraph Microservices Layer
+        JP[JSON Provider<br/>:8001]
+        XP[XML Provider<br/>:8002]
+    end
+
+    subgraph Orchestration Layer
+        WS[WriteService<br/>:8003<br/>Hangfire + EF Core]
+    end
+
+    subgraph Event Bus
+        EB[EventBusService<br/>:8004]
+        RMQ[RabbitMQ<br/>:5672/15672]
+    end
+
+    subgraph Search Layer
+        SW[SearchWorker<br/>:8005]
+        ES[Elasticsearch<br/>:9200]
+        KB[Kibana<br/>:5601]
+    end
+
+    subgraph Storage
+        PG[(PostgreSQL<br/>:5433<br/>hangfire/searchcase)]
+    end
+
+    API1 --> JP
+    API2 --> XP
+    JP --> WS
+    XP --> WS
+    WS --> PG
+    WS --> EB
+    EB --> RMQ
+    RMQ --> SW
+    SW --> ES
+    ES --> KB
 ```
-┌─────────────────────────┐
-│   Hangfire Worker       │
-│   - Job Scheduler       │
-│   - Job Processor       │
-│   - Dashboard           │
-└──────────┬──────────────┘
-           │
-           ├─> PostgreSQL (Job Storage)
-           │
-           ├─> Microservice A (Every 5 min)
-           └─> Microservice B (Daily)
-```
 
-## Features
+## 🚀 Quick Start
 
-- ✅ Production-ready Docker setup
-- ✅ PostgreSQL with persistent storage
-- ✅ Retry with exponential backoff
-- ✅ Circuit breaker pattern
-- ✅ Health checks
-- ✅ Structured logging (Serilog)
-- ✅ Hangfire Dashboard
+### Prerequisites
+- Docker & Docker Compose
+- .NET 8.0/9.0 SDK (for local development)
+- 8GB RAM minimum
+- 10GB free disk space
 
-## Quick Start
-
-### 1. Start Services
+### Start All Services
 
 ```bash
+# Clone repository
+git clone <repository-url>
+cd SearchCase
+
+# Start all services with Docker Compose
 docker-compose up -d
+
+# Verify all services are running
+docker ps
+
+# View logs
+docker-compose logs -f
 ```
 
-### 2. Check Status
+### Access Points
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| **Hangfire Dashboard** | http://localhost:8003/hangfire | Background job monitoring |
+| **RabbitMQ Management** | http://localhost:15672 | Message queue dashboard (guest/guest) |
+| **Kibana** | http://localhost:5601 | Elasticsearch visualization |
+| **JSON Provider Swagger** | http://localhost:8001/swagger | JSON Provider API docs |
+| **XML Provider Swagger** | http://localhost:8002/swagger | XML Provider API docs |
+| **pgAdmin** | http://localhost:5050 | Database management (admin@searchcase.local/admin123) |
+
+## 🔧 Services Description
+
+### 1. **Provider Microservices** (Ports 8001-8002)
+- **JsonProviderMicroservice** (.NET 9.0): Fetches and transforms JSON data
+- **XmlProviderMicroservice** (.NET 9.0): Fetches and transforms XML data
+- Implements canonical transformation pattern
+- Built-in retry policies and circuit breakers (Polly)
+- Health checks and Swagger documentation
+
+### 2. **WriteService** (Port 8003) - Primary Orchestrator
+- Combines Hangfire scheduling with Entity Framework Core
+- **ContentSyncJob**: Runs every 5 minutes
+  - Fetches from all providers in parallel
+  - Hash-based change detection
+  - Bulk upsert operations
+  - Publishes events to EventBus
+- **FreshnessScoreUpdateJob**: Daily score recalculation
+- Audit logging with ContentChangeLogs table
+- Dashboard at http://localhost:8003/hangfire
+
+### 3. **EventBusService** (Port 8004)
+- REST API wrapper for RabbitMQ
+- Publishes content change events
+- Circuit breaker pattern for resilience
+- Endpoints:
+  - `POST /api/events/content-changed`
+  - `GET /health`
+
+### 4. **SearchWorker** (Port 8005)
+- Consumes RabbitMQ messages
+- Indexes content to Elasticsearch
+- Bulk indexing for performance
+- Automatic index management
+
+### 5. **Infrastructure Services**
+- **PostgreSQL** (Port 5433): Stores content and Hangfire jobs
+- **RabbitMQ** (Ports 5672/15672): Message broker
+- **Elasticsearch** (Port 9200): Full-text search engine
+- **Kibana** (Port 5601): Search visualization
+
+## 📊 Data Flow
+
+```
+1. Hangfire triggers ContentSyncJob every 5 minutes
+2. WriteService calls both Provider microservices in parallel
+3. Providers fetch from external APIs and transform to canonical format
+4. WriteService performs change detection (NEW/UPDATED/UNCHANGED)
+5. Changed content is saved to PostgreSQL
+6. Events are published to EventBus → RabbitMQ
+7. SearchWorker consumes messages and indexes to Elasticsearch
+8. Users can search via Kibana
+```
+
+## 🗄️ Database Schema
+
+### PostgreSQL Databases
+
+#### `hangfire` Database
+- Hangfire job storage (auto-created tables)
+- Schema: `hangfire.*`
+
+#### `searchcase` Database
+```sql
+-- Main content table
+CREATE TABLE contents (
+    id VARCHAR(255) PRIMARY KEY,
+    type VARCHAR(50),
+    title TEXT,
+    published_at TIMESTAMP,
+    categories TEXT[],
+    source_provider VARCHAR(100),
+    metrics JSONB,
+    score DECIMAL,
+    content_hash VARCHAR(64),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- Audit log table
+CREATE TABLE content_change_logs (
+    id UUID PRIMARY KEY,
+    content_id VARCHAR(255),
+    change_type VARCHAR(50),
+    changed_fields JSONB,
+    sync_batch_id UUID,
+    created_at TIMESTAMP
+);
+
+-- Sync tracking table
+CREATE TABLE sync_batches (
+    id UUID PRIMARY KEY,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    status VARCHAR(50),
+    items_fetched INTEGER,
+    items_created INTEGER,
+    items_updated INTEGER,
+    items_unchanged INTEGER
+);
+```
+
+## 🔑 Key Features
+
+### Canonical Schema Pattern
+- **CanonicalContent**: Base class for all content
+- **CanonicalVideoContent**: Video-specific metrics (views, likes, duration)
+- **CanonicalArticleContent**: Article-specific metrics (reading time, reactions)
+- JSON polymorphism with type discrimination
+
+### Change Detection Strategy
+- Hash-based comparison (SHA256)
+- Tracks NEW, UPDATED, and UNCHANGED items
+- Optimized to only update changed content
+- Complete audit trail in ContentChangeLogs
+
+### Resilience Patterns
+- **Retry Policy**: Exponential backoff with jitter
+- **Circuit Breaker**: Prevents cascade failures
+- **Health Checks**: Readiness and liveness probes
+- **Graceful Degradation**: Partial provider failures handled
+
+### Event-Driven Architecture
+- Asynchronous processing via RabbitMQ
+- Decoupled services communication
+- At-least-once delivery guarantee
+- Dead letter queue for failed messages
+
+## 🛠️ Development
+
+### Local Development Setup
 
 ```bash
-docker-compose ps
+# 1. Start infrastructure only
+docker-compose up -d search-db rabbitmq elasticsearch
+
+# 2. Run microservices locally
+cd src/JsonProviderMicroservice && dotnet run
+cd src/XmlProviderMicroservice && dotnet run
+cd src/WriteService && dotnet run
+
+# 3. Access Hangfire Dashboard
+open http://localhost:8003/hangfire
 ```
 
-### 3. Access Dashboard
-
-```
-http://localhost:5100/hangfire
-```
-
-### 4. Check Health
+### Building the Solution
 
 ```bash
-curl http://localhost:5100/health
+# Build all projects
+dotnet build SearchCase.sln
+
+# Run tests
+dotnet test SearchCase.sln
+
+# Clean build artifacts
+dotnet clean SearchCase.sln
 ```
 
-## Project Structure
+### Adding a New Provider
 
-```
-SearchCase/
-├── src/HangfireWorker/      # Worker Service
-│   ├── Jobs/                 # Job implementations
-│   ├── Services/             # HTTP clients
-│   └── Configuration/        # Settings
-├── scripts/                  # Database init
-├── data/                     # PostgreSQL data (gitignored)
-├── docker-compose.yml
-└── README.md
-```
+1. Create new project referencing `SearchCase.Contracts`
+2. Implement `IContentMapper<TProviderDto>` interface
+3. Add HTTP client configuration in `ServiceCollectionExtensions`
+4. Register in WriteService's `ProviderClient`
 
-## Configuration
+## 📝 Configuration
 
-### Environment Variables (.env)
+### Environment Variables
 
 ```env
 # PostgreSQL
 POSTGRES_PASSWORD=postgres
 
+# RabbitMQ
+RABBITMQ_DEFAULT_USER=guest
+RABBITMQ_DEFAULT_PASS=guest
+
+# Elasticsearch
+ELASTIC_PASSWORD=elastic
+
+# Provider URLs (for WriteService)
+Providers__JsonProvider__BaseUrl=http://json-provider:8080
+Providers__XmlProvider__BaseUrl=http://xml-provider:8080
+
 # Hangfire
-HANGFIRE_WORKER_COUNT=5
-
-# Microservices
-SERVICE_A_URL=http://host.docker.internal:8001
-SERVICE_B_URL=http://host.docker.internal:8002
+Hangfire__WorkerCount=2
+Hangfire__SyncJobCronExpression=*/5 * * * *
 ```
 
-### Database Connection
+### Connection Strings
 
-**Container:** `search-db`
-**Port:** `5433` (to avoid conflict with system PostgreSQL)
-**User:** `postgres`
-**Password:** `postgres` (from .env)
-**Databases:** `postgres` (default), `hangfire` (jobs)
-
-**Connection String:**
-```
-Host=localhost;Port=5433;Database=hangfire;Username=postgres;Password=postgres
+```json
+{
+  "ConnectionStrings": {
+    "WriteServiceDb": "Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=postgres",
+    "HangfireDb": "Host=search-db;Port=5432;Database=hangfire;Username=postgres;Password=postgres"
+  }
+}
 ```
 
-**DataGrip/IDE:**
-```
-Host:     localhost
-Port:     5433
-Database: hangfire
-User:     postgres
-Password: postgres
-```
+## 🔍 Monitoring & Debugging
 
-## Scheduled Jobs
-
-| Job | Schedule | Target | Endpoint |
-|-----|----------|--------|----------|
-| **FrequentJob** | Every 5 minutes | Microservice A | `/api/process` |
-| **DailyJob** | Daily 02:00 UTC | Microservice B | `/api/process` |
-
-## Endpoints
-
-### Hangfire Dashboard
-- **URL:** http://localhost:5100/hangfire
-- **Features:** Job monitoring, manual execution, retry
-
-### Health Checks
-- `/health` - Critical dependencies only (PostgreSQL)
-- `/health/ready` - Readiness probe (same as /health)
-- `/health/live` - Liveness probe (always healthy if app is running)
-- `/health/external` - Optional external services (microservices - may be degraded)
-
-## Docker Commands
+### View Logs
 
 ```bash
-# Start services
-docker-compose up -d
+# All services
+docker-compose logs -f
 
-# View logs
-docker-compose logs -f hangfire-worker
-docker-compose logs -f search-db
-
-# Stop services
-docker-compose down
-
-# Stop and remove data
-docker-compose down -v
+# Specific service
+docker-compose logs -f write-service
+docker-compose logs -f json-provider
 ```
 
-## Makefile Commands
+### Database Queries
 
 ```bash
-make up            # Start all services
-make down          # Stop all services
-make logs-worker   # View worker logs
-make logs-db       # View database logs
-make health        # Check health
-make dashboard     # Open dashboard
-make db-shell      # PostgreSQL shell
-make verify-db     # Verify database
-make clean         # Clean everything
+# Connect to PostgreSQL
+docker exec -it search-db psql -U postgres -d searchcase
+
+# Common queries
+SELECT COUNT(*) FROM contents;
+SELECT * FROM content_change_logs ORDER BY created_at DESC LIMIT 10;
+SELECT * FROM sync_batches ORDER BY started_at DESC LIMIT 5;
 ```
 
-## Database Management
-
-### PostgreSQL Shell
+### Elasticsearch Queries
 
 ```bash
-# Via make
-make db-shell
+# Check indices
+curl http://localhost:9200/_cat/indices?v
 
-# Via docker
-docker exec -it search-db psql -U postgres -d hangfire
+# Search content
+curl http://localhost:9200/content-index/_search?q=*
 ```
 
-### Common Queries
+### RabbitMQ Management
 
-```sql
--- List all databases
-\l
+```bash
+# List queues
+curl -u guest:guest http://localhost:15672/api/queues
 
--- List tables
-\dt hangfire.*
-
--- View jobs
-SELECT id, statename, createdat
-FROM hangfire.job
-ORDER BY createdat DESC
-LIMIT 10;
+# Check messages
+open http://localhost:15672
 ```
 
-## Development
+## ⚡ Performance Optimizations
 
-### Local Development (Without Docker)
+- **Bulk Operations**: Content upserted in batches
+- **Parallel Processing**: Providers called simultaneously
+- **Change Detection**: Only modified content is processed
+- **Score Calculation**: Computed only for changed items
+- **Connection Pooling**: Optimized database connections
+- **Circuit Breaker**: Prevents cascade failures
 
-1. **Start PostgreSQL:**
+## 🔒 Security Considerations
+
+### Development Setup
+- Default passwords used (change in production!)
+- No authentication on dashboards
+- All services exposed on localhost
+
+### Production Recommendations
+- Use secrets management (Azure Key Vault, AWS Secrets Manager)
+- Enable TLS/SSL for all communications
+- Implement API authentication (JWT, OAuth2)
+- Use network policies in Kubernetes
+- Enable audit logging
+- Regular security updates
+
+## 🧪 Testing
+
+### Unit Tests
+```bash
+dotnet test src/SearchCase.Contracts.Tests
+```
+
+### Integration Tests
+```bash
+# Start test environment
+docker-compose -f docker-compose.test.yml up -d
+
+# Run integration tests
+dotnet test src/WriteService.IntegrationTests
+```
+
+### Manual Testing
+
+1. **Trigger Sync Manually**:
+   - Go to http://localhost:8003/hangfire
+   - Navigate to "Recurring Jobs"
+   - Click "Trigger Now" on ContentSyncJob
+
+2. **Verify in Elasticsearch**:
    ```bash
-   docker-compose up -d search-db
+   curl http://localhost:9200/content-index/_count
    ```
 
-2. **Run worker:**
-   ```bash
-   cd src/HangfireWorker
-   dotnet run
+3. **Check Audit Logs**:
+   ```sql
+   SELECT * FROM content_change_logs ORDER BY created_at DESC;
    ```
 
-### Build Solution
+## 📚 Technology Stack
 
-```bash
-dotnet build SearchCase.sln
-```
+- **.NET 8.0/9.0**: Microservices framework
+- **Hangfire**: Background job processing
+- **Entity Framework Core**: ORM for data access
+- **PostgreSQL 16**: Primary database
+- **RabbitMQ 3.13**: Message broker
+- **Elasticsearch 8.x**: Search engine
+- **Docker & Docker Compose**: Containerization
+- **Polly**: Resilience and transient fault handling
+- **Serilog**: Structured logging
+- **FluentValidation**: Input validation
+- **Swagger/OpenAPI**: API documentation
 
-## Data Persistence
+## 🤝 Contributing
 
-PostgreSQL data is stored in `./data/postgres/` (gitignored).
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests
+5. Submit a pull request
 
-**Backup:**
-```bash
-docker exec search-db pg_dump -U postgres hangfire > backup.sql
-```
-
-**Restore:**
-```bash
-docker exec -i search-db psql -U postgres hangfire < backup.sql
-```
-
-## Troubleshooting
-
-### Worker Not Starting
-
-```bash
-# Check logs
-docker-compose logs hangfire-worker
-
-# Restart worker
-docker-compose restart hangfire-worker
-```
-
-### Database Connection Error
-
-```bash
-# Check if DB is running
-docker-compose ps
-
-# Check DB health
-docker exec search-db pg_isready -U postgres
-
-# View DB logs
-docker-compose logs search-db
-```
-
-### Jobs Not Executing
-
-1. Check Hangfire Dashboard for errors
-2. Verify microservice URLs in `.env`
-3. Check worker logs
-
-## Security Notes
-
-**Development Configuration:**
-- User: `postgres`
-- Password: `postgres`
-- ⚠️ For development only!
-
-**Production Recommendations:**
-- Use strong, unique passwords
-- Store credentials in secrets manager
-- Enable SSL/TLS
-- Use read-only replicas for reporting
-- Implement IP whitelisting
-
-## Tech Stack
-
-- .NET 8.0
-- Hangfire (Background jobs)
-- PostgreSQL 16 (Storage)
-- Serilog (Logging)
-- Polly (Resilience)
-- Docker & Docker Compose
-
-## License
+## 📄 License
 
 This project is proprietary to SearchCase.
+
+## 📞 Support
+
+For issues and questions:
+- Check the [CLAUDE.md](./CLAUDE.md) file for detailed technical guidance
+- Review logs in `/logs` directory
+- Check service health endpoints
+
+---
+
+**Last Updated**: October 2024
+**Version**: 2.0.0
+**Maintainer**: SearchCase Team

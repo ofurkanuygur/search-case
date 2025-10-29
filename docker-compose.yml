@@ -127,6 +127,8 @@ services:
         condition: service_healthy
       xml-provider:
         condition: service_healthy
+      eventbus-service:
+        condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
       - ASPNETCORE_URLS=http://+:8080
@@ -136,6 +138,10 @@ services:
       - Providers__JsonProvider__TimeoutSeconds=30
       - Providers__XmlProvider__BaseUrl=http://xml-provider:8080
       - Providers__XmlProvider__TimeoutSeconds=30
+      - EventBus__BaseUrl=http://eventbus-service:8080
+      - EventBus__TimeoutSeconds=30
+      - EventBus__CircuitBreakerThreshold=3
+      - EventBus__CircuitBreakerDurationSeconds=30
       - Hangfire__WorkerCount=2
       - Hangfire__SyncJobCronExpression=*/5 * * * *
       - Logging__LogLevel__Default=Information
@@ -165,11 +171,311 @@ services:
           cpus: '0.5'
           memory: 512M
 
+  # RabbitMQ Message Broker for Event Bus
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: searchcase-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - ./data/rabbitmq:/var/lib/rabbitmq
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # EventBus Service - Event Publishing Service
+  eventbus-service:
+    build:
+      context: .
+      dockerfile: ./src/EventBusService/Dockerfile
+    container_name: searchcase-eventbus
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Port=5672
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8004:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Redis Cache Service
+  redis:
+    image: redis:7-alpine
+    container_name: searchcase-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Cache Worker Service - Redis Cache Consumer
+  cache-worker:
+    build:
+      context: .
+      dockerfile: ./src/CacheWorker/Dockerfile
+    container_name: searchcase-cache-worker
+    depends_on:
+      search-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__WriteServiceDb=Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      - ConnectionStrings__Redis=redis:6379
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+      - Cache__ExpirationHours=24
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8005:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Elasticsearch Search Engine
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: searchcase-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - cluster.name=searchcase-cluster
+      - node.name=searchcase-node-1
+      - bootstrap.memory_lock=true
+      - http.cors.enabled=true
+      - http.cors.allow-origin="*"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./data/elasticsearch:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Search Worker Service - Elasticsearch Consumer
+  search-worker:
+    build:
+      context: .
+      dockerfile: ./src/SearchWorker/Dockerfile
+    container_name: searchcase-search-worker
+    depends_on:
+      search-db:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__WriteServiceDb=Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      - Elasticsearch__Url=http://elasticsearch:9200
+      - Elasticsearch__IndexName=content-index
+      - Elasticsearch__TimeoutSeconds=30
+      - Elasticsearch__MaxRetries=3
+      - Elasticsearch__NumberOfShards=1
+      - Elasticsearch__NumberOfReplicas=0
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8006:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Time Service - Daily Score Recalculation Service
+  time-service:
+    build:
+      context: .
+      dockerfile: ./src/TimeService/Dockerfile
+    container_name: searchcase-time-service
+    depends_on:
+      search-db:
+        condition: service_healthy
+      eventbus-service:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__WriteServiceDb=Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres};Pooling=true;MinPoolSize=2;MaxPoolSize=20
+      - EventBus__BaseUrl=http://eventbus-service:8080
+      - EventBus__TimeoutSeconds=30
+      - EventBus__RetryCount=3
+      - EventBus__RetryDelaySeconds=2
+      - EventBus__CircuitBreakerThreshold=3
+      - EventBus__CircuitBreakerDurationSeconds=30
+      - Logging__LogLevel__Default=Information
+      - TZ=UTC
+    ports:
+      - "8007:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
   # Hangfire Worker Service (Original - to be deprecated)
   hangfire-worker:
     build:
-      context: ./src/HangfireWorker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./src/HangfireWorker/Dockerfile
       args:
         BUILDCONFIG: Release
     container_name: searchcase-hangfire-worker
@@ -187,10 +493,12 @@ services:
       - Hangfire__Queues__0=default
       - Hangfire__Queues__1=criticahttp://localhost:5100/hangfirel
       - Hangfire__DashboardEnabled=true
-      - Microservices__ServiceA__BaseUrl=http://json-provider:8080
-      - Microservices__ServiceA__TimeoutSeconds=300
-      - Microservices__ServiceB__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
-      - Microservices__ServiceB__TimeoutSeconds=300
+      - Microservices__SyncJobService__BaseUrl=http://json-provider:8080
+      - Microservices__SyncJobService__TimeoutSeconds=300
+      - Microservices__DailyJobService__BaseUrl=${SERVICE_B_URL:-http://host.docker.internal:8002}
+      - Microservices__DailyJobService__TimeoutSeconds=300
+      - Microservices__TimeService__BaseUrl=http://time-service:8080
+      - Microservices__TimeService__TimeoutSeconds=300
       - Logging__LogLevel__Default=Information
       - Logging__LogLevel__Hangfire=Information
       - TZ=UTC
