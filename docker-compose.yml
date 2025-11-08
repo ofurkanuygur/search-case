@@ -39,7 +39,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
       - ASPNETCORE_URLS=http://+:8080
-      - ExternalApi__BaseUrl=https://1mjj9.wiremockapi.cloud/api/Provider/data
+      - ExternalApi__BaseUrl:=https://raw.githubusercontent.com/WEG-Technology/mock/refs/heads/main/v2/provider1
       - ExternalApi__TimeoutSeconds=10
       - ExternalApi__RetryCount=3
       - ExternalApi__RetryDelaySeconds=2

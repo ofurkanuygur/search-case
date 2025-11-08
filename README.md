@@ -4,6 +4,25 @@ A production-ready microservices-based content aggregation platform that fetches
 
 ## 🏗️ Architecture Overview
 
+![Architecture Diagram](docs/images/architecture-overview.png)
+
+The system follows an event-driven microservices architecture with the following components:
+
+- **Hangfire**: Orchestrates scheduled jobs (DailyJob, FrequencyJob)
+- **WriteService**: Central orchestrator for content synchronization and database operations
+- **Provider Microservices**: JSON and XML providers fetch and transform external data
+- **EventBusService**: RabbitMQ REST API wrapper for event publishing
+- **Message Broker (RabbitMQ)**: Asynchronous communication between services
+- **Workers**:
+  - **SearchWorker**: Consumes events and indexes to Elasticsearch
+  - **CacheWorker**: Consumes events and updates Redis cache
+- **Search & UI Layer**:
+  - **SearchService**: Unified search API with strategy pattern (Elasticsearch/Redis/Hybrid)
+  - **Dashboard**: End-user web interface
+- **Storage Layer**: PostgreSQL (DB), Elasticsearch, Redis
+
+### Detailed Architecture Diagram
+
 ```mermaid
 graph TD
     subgraph External Sources
