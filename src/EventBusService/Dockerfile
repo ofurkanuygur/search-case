@@ -1,5 +1,5 @@
 # Build stage
-FROM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 
@@ -21,12 +21,13 @@ RUN dotnet build "EventBusService.csproj" -c $BUILD_CONFIGURATION -o /app/build
 RUN dotnet publish "EventBusService.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 # Runtime stage
-FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS final
-RUN apk add --no-cache curl
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN addgroup -g 1000 -S appuser && \
-    adduser -u 1000 -S appuser -G appuser
+RUN groupadd -r -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser appuser
 
 WORKDIR /app
 COPY --from=build /app/publish .

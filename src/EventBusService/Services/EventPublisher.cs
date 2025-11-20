@@ -1,20 +1,21 @@
 using MassTransit;
+using EventBusContracts;
 
 namespace EventBusService.Services;
 
 /// <summary>
-/// Implementation of event publisher using MassTransit and RabbitMQ
+/// Implementation of event publisher using MassTransit and Apache Kafka
 /// </summary>
 public class EventPublisher : IEventPublisher
 {
-    private readonly IPublishEndpoint _publishEndpoint;
+    private readonly ITopicProducer<ContentBatchUpdatedEvent> _kafkaProducer;
     private readonly ILogger<EventPublisher> _logger;
 
     public EventPublisher(
-        IPublishEndpoint publishEndpoint,
+        ITopicProducer<ContentBatchUpdatedEvent> kafkaProducer,
         ILogger<EventPublisher> logger)
     {
-        _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
+        _kafkaProducer = kafkaProducer ?? throw new ArgumentNullException(nameof(kafkaProducer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -30,20 +31,29 @@ public class EventPublisher : IEventPublisher
         try
         {
             _logger.LogInformation(
-                "Publishing event: {EventType} - {EventMessage}",
+                "Publishing event to Kafka: {EventType} - {EventMessage}",
                 typeof(T).Name,
                 eventMessage);
 
-            await _publishEndpoint.Publish(eventMessage, cancellationToken);
+            // For now, only support ContentBatchUpdatedEvent
+            if (eventMessage is ContentBatchUpdatedEvent batchEvent)
+            {
+                await _kafkaProducer.Produce(batchEvent, cancellationToken);
+            }
+            else
+            {
+                _logger.LogWarning("Event type {EventType} is not supported for Kafka publishing", typeof(T).Name);
+                return;
+            }
 
             _logger.LogInformation(
-                "Successfully published event: {EventType}",
+                "Successfully published event to Kafka: {EventType}",
                 typeof(T).Name);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Failed to publish event: {EventType}",
+                "Failed to publish event to Kafka: {EventType}",
                 typeof(T).Name);
             throw;
         }

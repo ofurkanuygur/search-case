@@ -11,8 +11,8 @@ The system follows an event-driven microservices architecture with the following
 - **Hangfire**: Orchestrates scheduled jobs (DailyJob, FrequencyJob)
 - **WriteService**: Central orchestrator for content synchronization and database operations
 - **Provider Microservices**: JSON and XML providers fetch and transform external data
-- **EventBusService**: RabbitMQ REST API wrapper for event publishing
-- **Message Broker (RabbitMQ)**: Asynchronous communication between services
+- **EventBusService**: Kafka producer for event publishing
+- **Message Broker (Apache Kafka)**: Event streaming and asynchronous communication
 - **Workers**:
   - **SearchWorker**: Consumes events and indexes to Elasticsearch
   - **CacheWorker**: Consumes events and updates Redis cache
@@ -41,7 +41,8 @@ graph TD
 
     subgraph Event Bus
         EB[EventBusService<br/>:8004]
-        RMQ[RabbitMQ<br/>:5672/15672]
+        KAFKA[Apache Kafka<br/>:9092/9094]
+        KUI[Kafka UI<br/>:8090]
     end
 
     subgraph Workers
@@ -67,9 +68,10 @@ graph TD
     XP --> WS
     WS --> PG
     WS --> EB
-    EB --> RMQ
-    RMQ --> SW
-    RMQ --> CW
+    EB --> KAFKA
+    KAFKA --> SW
+    KAFKA --> CW
+    KAFKA --> KUI
     SW --> ES
     CW --> RD
     ES --> KB
@@ -112,7 +114,7 @@ docker-compose logs -f
 | **SearchService API** | http://localhost:8007/swagger | Search API documentation |
 | **JSON Provider Swagger** | http://localhost:8001/swagger | JSON Provider API docs |
 | **XML Provider Swagger** | http://localhost:8002/swagger | XML Provider API docs |
-| **RabbitMQ Management** | http://localhost:15672 | Message queue dashboard (guest/guest) |
+| **Kafka UI** | http://localhost:8090 | Kafka topics, messages, and consumer monitoring |
 | **Kibana** | http://localhost:5601 | Elasticsearch visualization |
 | **pgAdmin** | http://localhost:5050 | Database management (admin@searchcase.local/admin123) |
 
@@ -137,26 +139,34 @@ docker-compose logs -f
 - Dashboard at http://localhost:8003/hangfire
 
 ### 3. **EventBusService** (Port 8004)
-- REST API wrapper for RabbitMQ
-- Publishes content change events
+- Kafka producer for event publishing
+- Publishes content change events to Kafka topics
 - Circuit breaker pattern for resilience
+- Idempotent producer (prevents duplicate messages)
+- Compression: gzip
 - Endpoints:
   - `POST /api/events/content-changed`
   - `GET /health`
 
 ### 4. **SearchWorker** (Port 8005)
-- Consumes RabbitMQ messages
-- Indexes content to Elasticsearch
+- Kafka consumer (consumer group: `search-workers`)
+- Indexes content to Elasticsearch in real-time
 - Bulk indexing for performance
 - Automatic index management
-- Dead letter queue (DLQ) for failed messages
+- Manual offset commit (checkpoint: 30s or 100 messages)
+- Exponential backoff retry policy (3 attempts)
+- Circuit breaker pattern for fault tolerance
+- Concurrency: 4 parallel message processing
 
 ### 5. **CacheWorker** (Port 8006)
-- Redis caching service
-- Consumes content update events from RabbitMQ
-- Cache invalidation strategy
+- Kafka consumer (consumer group: `cache-workers`)
+- Redis caching service for hot data
+- Consumes content update events from Kafka
+- Cache invalidation strategy on updates
 - TTL-based expiration
-- Key schema: `content:{contentId}`
+- Key schema: `searchcase:content:{contentId}`
+- Manual offset commit (checkpoint: 30s or 100 messages)
+- Exponential backoff retry policy (3 attempts)
 
 ### 6. **SearchService** (Port 8007)
 - Unified search API with Strategy Pattern
@@ -176,7 +186,8 @@ docker-compose logs -f
 
 ### 8. **Infrastructure Services**
 - **PostgreSQL** (Port 5433): Primary database (hangfire, searchcase schemas)
-- **RabbitMQ** (Ports 5672/15672): Message broker with management UI
+- **Apache Kafka** (Ports 9092/9094): Event streaming platform (KRaft mode)
+- **Kafka UI** (Port 8090): Web interface for Kafka monitoring
 - **Elasticsearch** (Port 9200): Full-text search engine
 - **Kibana** (Port 5601): Search data visualization
 - **Redis** (Port 6379): High-performance caching layer
@@ -189,9 +200,9 @@ docker-compose logs -f
 3. Providers fetch from external APIs and transform to canonical format
 4. WriteService performs change detection (NEW/UPDATED/UNCHANGED)
 5. Changed content is saved to PostgreSQL
-6. Events are published to EventBus → RabbitMQ
-7. SearchWorker consumes messages and indexes to Elasticsearch
-8. CacheWorker consumes messages and updates Redis cache
+6. Events are published to EventBus → Apache Kafka (topic: content-batch-updated)
+7. SearchWorker (consumer group: search-workers) consumes from Kafka and indexes to Elasticsearch
+8. CacheWorker (consumer group: cache-workers) consumes from Kafka and updates Redis cache
 9. SearchService queries Elasticsearch/Redis with strategy pattern
 10. Dashboard displays search results to end users
 ```
@@ -205,12 +216,14 @@ docker-compose logs -f
 - **Team Autonomy**: Different teams can work on different services
 - **Deployment Independence**: Deploy bug fixes without affecting other services
 
-### Why Event-Driven Architecture?
+### Why Event-Driven Architecture with Kafka?
 - **Asynchronous Processing**: Non-blocking operations for better performance
 - **Loose Coupling**: Services don't need to know about each other
-- **Scalability**: Add more consumers when message volume increases
-- **Reliability**: Messages persisted in RabbitMQ until consumed
-- **Audit Trail**: Complete event log for debugging and compliance
+- **Scalability**: Add more consumers when message volume increases (partitions enable parallelism)
+- **Reliability**: Messages persisted in Kafka with 7-day retention
+- **Message Replay**: Offset-based replay for reprocessing or debugging
+- **Audit Trail**: Complete event log for debugging, compliance, and analytics
+- **High Throughput**: 100K+ messages/second capability
 
 ### Why Strategy Pattern for Search?
 - **Flexibility**: Switch between Elasticsearch/Redis/Hybrid at runtime
@@ -224,7 +237,7 @@ docker-compose logs -f
 |------------|------------|------------------------|
 | **.NET 8.0/9.0** | High performance, cross-platform, mature ecosystem | Node.js, Java Spring Boot |
 | **PostgreSQL** | ACID compliance, JSONB support, proven reliability | MongoDB, SQL Server |
-| **RabbitMQ** | Battle-tested, excellent .NET support, reliable | Kafka, Azure Service Bus |
+| **Apache Kafka** | High throughput, message replay, event sourcing | RabbitMQ, Azure Service Bus |
 | **Elasticsearch** | Superior full-text search, scalable, rich querying | Azure Cognitive Search, Solr |
 | **Redis** | Blazing fast, simple API, wide adoption | Memcached, Hazelcast |
 | **Docker** | Environment consistency, easy deployment | Kubernetes (overkill for this scale) |
@@ -308,10 +321,12 @@ CREATE TABLE sync_batches (
 - **Graceful Degradation**: Partial provider failures handled
 
 ### Event-Driven Architecture
-- Asynchronous processing via RabbitMQ
+- Asynchronous processing via Apache Kafka
 - Decoupled services communication
 - At-least-once delivery guarantee
-- Dead letter queue for failed messages
+- Message replay with offset management
+- 7-day retention for audit and reprocessing
+- Topic: `content-batch-updated` with 3 partitions
 
 ## 🛠️ Development
 
@@ -319,7 +334,7 @@ CREATE TABLE sync_batches (
 
 ```bash
 # 1. Start infrastructure only
-docker-compose up -d search-db rabbitmq elasticsearch
+docker-compose up -d search-db kafka elasticsearch redis
 
 # 2. Run microservices locally
 cd src/JsonProviderMicroservice && dotnet run
@@ -358,9 +373,10 @@ dotnet clean SearchCase.sln
 # PostgreSQL
 POSTGRES_PASSWORD=postgres
 
-# RabbitMQ
-RABBITMQ_DEFAULT_USER=guest
-RABBITMQ_DEFAULT_PASS=guest
+# Apache Kafka (KRaft Mode - No Zookeeper needed)
+KAFKA_NUM_PARTITIONS=3
+KAFKA_LOG_RETENTION_HOURS=168  # 7 days
+KAFKA_COMPRESSION_TYPE=gzip
 
 # Elasticsearch
 ELASTIC_PASSWORD=elastic
@@ -420,14 +436,26 @@ curl http://localhost:9200/_cat/indices?v
 curl http://localhost:9200/content-index/_search?q=*
 ```
 
-### RabbitMQ Management
+### Kafka Management
 
 ```bash
-# List queues
-curl -u guest:guest http://localhost:15672/api/queues
+# List topics
+docker exec searchcase-kafka kafka-topics --list --bootstrap-server localhost:9092
 
-# Check messages
-open http://localhost:15672
+# Describe topic
+docker exec searchcase-kafka kafka-topics \
+  --describe --topic content-batch-updated --bootstrap-server localhost:9092
+
+# Check consumer groups
+docker exec searchcase-kafka kafka-consumer-groups \
+  --list --bootstrap-server localhost:9092
+
+# Consumer group details (check offset lag)
+docker exec searchcase-kafka kafka-consumer-groups \
+  --describe --group search-workers --bootstrap-server localhost:9092
+
+# Kafka UI (recommended)
+open http://localhost:8090
 ```
 
 ## ⚡ Performance Optimizations
@@ -493,13 +521,113 @@ dotnet test src/WriteService.IntegrationTests
 - **Hangfire**: Background job processing
 - **Entity Framework Core**: ORM for data access
 - **PostgreSQL 16**: Primary database
-- **RabbitMQ 3.13**: Message broker
+- **Apache Kafka 7.6**: Event streaming platform (KRaft mode)
 - **Elasticsearch 8.x**: Search engine
 - **Docker & Docker Compose**: Containerization
 - **Polly**: Resilience and transient fault handling
 - **Serilog**: Structured logging
 - **FluentValidation**: Input validation
 - **Swagger/OpenAPI**: API documentation
+
+## 🎯 MassTransit Kafka Consumer Pattern
+
+The system uses **MassTransit 8.2.0** for Kafka integration. Here's the correct pattern for wiring consumers:
+
+### Key Pattern: Register Consumers in Rider Context
+
+```csharp
+builder.Services.AddMassTransit(x =>
+{
+    // InMemory bus for non-Kafka messaging
+    x.UsingInMemory((context, cfg) =>
+    {
+        cfg.ConfigureEndpoints(context);
+    });
+
+    // Kafka Rider for event streaming
+    x.AddRider(rider =>
+    {
+        // ✅ Register consumer in RIDER context (not main context)
+        rider.AddConsumer<ContentBatchUpdatedConsumer>();
+
+        rider.UsingKafka((context, kafka) =>
+        {
+            kafka.Host("kafka:9092");
+
+            // Configure topic endpoint
+            kafka.TopicEndpoint<ContentBatchUpdatedEvent>(topic, groupId, e =>
+            {
+                // ✅ Use ConfigureConsumer (not Handler pattern)
+                e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
+
+                // Kafka consumer settings
+                e.AutoOffsetReset = AutoOffsetReset.Earliest;
+                e.CheckpointInterval = TimeSpan.FromSeconds(30);
+                e.CheckpointMessageCount = 100;
+                e.ConcurrentMessageLimit = 4;
+                e.ConcurrentDeliveryLimit = 4;
+
+                // Retry policy
+                e.UseMessageRetry(r => r.Exponential(
+                    retryLimit: 3,
+                    minInterval: TimeSpan.FromSeconds(5),
+                    maxInterval: TimeSpan.FromSeconds(30),
+                    intervalDelta: TimeSpan.FromSeconds(5)));
+
+                // Circuit breaker
+                e.UseCircuitBreaker(cb =>
+                {
+                    cb.TrackingPeriod = TimeSpan.FromMinutes(1);
+                    cb.TripThreshold = 5;
+                    cb.ActiveThreshold = 2;
+                    cb.ResetInterval = TimeSpan.FromMinutes(5);
+                });
+            });
+        });
+    });
+});
+```
+
+### Common Mistakes to Avoid
+
+❌ **Don't** register consumer in main context for Kafka:
+```csharp
+x.AddConsumer<MyConsumer>();  // Wrong for Kafka!
+```
+
+❌ **Don't** use Handler pattern with scoped services:
+```csharp
+e.Handler<Event>(async ctx => {
+    var svc = ctx.ServiceProvider.GetRequiredService<MyService>(); // PayloadNotFoundException!
+});
+```
+
+✅ **Do** register in Rider context and use ConfigureConsumer:
+```csharp
+rider.AddConsumer<MyConsumer>();
+e.ConfigureConsumer<MyConsumer>(context);  // Correct!
+```
+
+## 🔄 Version History
+
+### v2.0.0 (2025-11-20) - Kafka Migration
+- **Breaking Change**: Migrated from RabbitMQ to Apache Kafka
+- Event streaming with Kafka 7.6 (KRaft mode - no Zookeeper)
+- Topic: `content-batch-updated` with 3 partitions
+- Consumer groups: `search-workers`, `cache-workers`
+- MassTransit.Kafka 8.2.0 integration
+- Kafka UI for monitoring (http://localhost:8090)
+- 7-day message retention for audit and replay
+- Manual offset management (at-least-once delivery)
+- Resilience patterns: retry, circuit breaker
+- Branch: `claude-sonnet4.5`
+
+### v1.0.0 (2024) - Initial Release
+- Microservices architecture with RabbitMQ
+- Provider microservices (JSON, XML)
+- WriteService with Hangfire orchestration
+- Elasticsearch and Redis integration
+- Search strategy pattern
 
 ## 🤝 Contributing
 
@@ -508,3 +636,7 @@ dotnet test src/WriteService.IntegrationTests
 3. Make your changes
 4. Run tests
 5. Submit a pull request
+
+## 📄 License
+
+This project is licensed under the MIT License.

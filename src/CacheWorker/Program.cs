@@ -31,53 +31,67 @@ builder.Services.AddDataAccess(builder.Configuration);
 // Register cache service
 builder.Services.AddSingleton<ICacheService, RedisCacheService>();
 
-// Configure MassTransit with RabbitMQ
+// Configure MassTransit with Apache Kafka
 builder.Services.AddMassTransit(x =>
 {
-    // Register consumers
-    x.AddConsumer<ContentBatchUpdatedConsumer>();
-
-    x.UsingRabbitMq((context, cfg) =>
+    // Use InMemory for command/response (not event streaming)
+    x.UsingInMemory((context, cfg) =>
     {
-        var rabbitMqConfig = builder.Configuration.GetSection("RabbitMQ");
-        var host = rabbitMqConfig["Host"] ?? "localhost";
-        var username = rabbitMqConfig["Username"] ?? "guest";
-        var password = rabbitMqConfig["Password"] ?? "guest";
-
-        cfg.Host(host, "/", h =>
-        {
-            h.Username(username);
-            h.Password(password);
-        });
-
-        // Configure consumer endpoint with retry policy
-        cfg.ReceiveEndpoint("cache-worker-queue", e =>
-        {
-            e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
-
-            // Retry policy - exponential backoff
-            e.UseMessageRetry(r => r.Exponential(
-                retryLimit: 3,
-                minInterval: TimeSpan.FromSeconds(5),
-                maxInterval: TimeSpan.FromSeconds(30),
-                intervalDelta: TimeSpan.FromSeconds(5)));
-
-            // Circuit breaker
-            e.UseCircuitBreaker(cb =>
-            {
-                cb.TrackingPeriod = TimeSpan.FromMinutes(1);
-                cb.TripThreshold = 5;
-                cb.ActiveThreshold = 2;
-                cb.ResetInterval = TimeSpan.FromMinutes(5);
-            });
-
-            // Concurrency limit
-            e.PrefetchCount = 16;
-            e.ConcurrentMessageLimit = 4;
-        });
-
-        // Configure timeout
         cfg.ConfigureEndpoints(context);
+    });
+
+    // Add Kafka Rider for event streaming
+    x.AddRider(rider =>
+    {
+        // Register consumer in Rider context for Kafka
+        rider.AddConsumer<ContentBatchUpdatedConsumer>();
+
+        rider.UsingKafka((context, kafka) =>
+        {
+            // Configure Kafka connection
+            var kafkaConfig = builder.Configuration.GetSection("Kafka");
+            var bootstrapServers = kafkaConfig["BootstrapServers"] ?? "kafka:9092";
+            var groupId = kafkaConfig["GroupId"] ?? "cache-workers";
+            var topic = kafkaConfig["Topic"] ?? "content-batch-updated";
+
+            kafka.Host(bootstrapServers);
+
+            // Configure Kafka topic endpoint
+            kafka.TopicEndpoint<EventBusContracts.ContentBatchUpdatedEvent>(topic, groupId, e =>
+            {
+                // Configure consumer for this topic endpoint
+                e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
+
+                // Kafka consumer settings
+                e.AutoOffsetReset = Enum.Parse<Confluent.Kafka.AutoOffsetReset>(
+                    kafkaConfig["AutoOffsetReset"] ?? "Earliest",
+                    ignoreCase: true);
+
+                // Manual commit for reliability
+                e.CheckpointInterval = TimeSpan.FromSeconds(30);
+                e.CheckpointMessageCount = 100;
+
+                // Concurrency - process multiple messages in parallel
+                e.ConcurrentMessageLimit = 4;
+                e.ConcurrentDeliveryLimit = 4;
+
+                // Retry policy - exponential backoff
+                e.UseMessageRetry(r => r.Exponential(
+                    retryLimit: 3,
+                    minInterval: TimeSpan.FromSeconds(5),
+                    maxInterval: TimeSpan.FromSeconds(30),
+                    intervalDelta: TimeSpan.FromSeconds(5)));
+
+                // Circuit breaker
+                e.UseCircuitBreaker(cb =>
+                {
+                    cb.TrackingPeriod = TimeSpan.FromMinutes(1);
+                    cb.TripThreshold = 5;
+                    cb.ActiveThreshold = 2;
+                    cb.ResetInterval = TimeSpan.FromMinutes(5);
+                });
+            });
+        });
     });
 });
 
@@ -123,7 +137,11 @@ app.Logger.LogInformation("PostgreSQL Connection: {Connection}",
     builder.Configuration.GetConnectionString("WriteServiceDb"));
 app.Logger.LogInformation("Redis Connection: {Connection}",
     builder.Configuration.GetConnectionString("Redis"));
-app.Logger.LogInformation("RabbitMQ Host: {Host}",
-    builder.Configuration["RabbitMQ:Host"]);
+app.Logger.LogInformation("Kafka Bootstrap Servers: {BootstrapServers}",
+    builder.Configuration["Kafka:BootstrapServers"] ?? "localhost:9092");
+app.Logger.LogInformation("Kafka Consumer Group: {GroupId}",
+    builder.Configuration["Kafka:GroupId"] ?? "cache-workers");
+app.Logger.LogInformation("Kafka Topic: {Topic}",
+    builder.Configuration["Kafka:Topic"] ?? "content-batch-updated");
 
 app.Run();

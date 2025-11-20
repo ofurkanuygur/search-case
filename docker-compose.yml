@@ -171,51 +171,131 @@ services:
           cpus: '0.5'
           memory: 512M
 
-  # RabbitMQ Message Broker for Event Bus
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: searchcase-rabbitmq
+  # Apache Kafka - Event Streaming Platform (KRaft Mode)
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: searchcase-kafka
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-      RABBITMQ_DEFAULT_VHOST: /
+      # KRaft mode configuration (no Zookeeper needed)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Cluster configuration
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+
+      # Topic configuration
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Retention policy - 7 days
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: -1
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+
+      # Performance tuning
+      KAFKA_COMPRESSION_TYPE: gzip
+      KAFKA_LOG_CLEANUP_POLICY: delete
+
+      # Logging
+      KAFKA_LOG4J_ROOT_LOGLEVEL: INFO
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN
     ports:
-      - "5672:5672"   # AMQP port
-      - "15672:15672" # Management UI
+      - "9092:9092"   # Kafka broker (internal)
+      - "9094:9094"   # Kafka broker (external for host machine)
     volumes:
-      - ./data/rabbitmq:/var/lib/rabbitmq
+      - ./data/kafka:/var/lib/kafka/data
     networks:
       - searchcase-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
       retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Kafka UI - Web Interface for Kafka Management
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: searchcase-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: searchcase-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_METRICS_PORT: 9997
+      DYNAMIC_CONFIG_ENABLED: "true"
+      LOGGING_LEVEL_ROOT: INFO
+      LOGGING_LEVEL_COM_PROVECTUS: WARN
+    ports:
+      - "8090:8080"
+    networks:
+      - searchcase-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 20s
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
-  # EventBus Service - Event Publishing Service
+  # EventBus Service - Event Publishing Service (Kafka Producer)
   eventbus-service:
     build:
       context: .
       dockerfile: ./src/EventBusService/Dockerfile
     container_name: searchcase-eventbus
     depends_on:
-      rabbitmq:
+      kafka:
         condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
       - ASPNETCORE_URLS=http://+:8080
-      - RabbitMQ__Host=rabbitmq
-      - RabbitMQ__Port=5672
-      - RabbitMQ__Username=guest
-      - RabbitMQ__Password=guest
+      - Kafka__BootstrapServers=kafka:9092
+      - Kafka__Topic=content-batch-updated
+      - Kafka__Partitions=3
+      - Kafka__ReplicationFactor=1
+      - Kafka__EnableIdempotence=true
+      - Kafka__CompressionType=gzip
       - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__MassTransit=Information
       - TZ=UTC
     ports:
       - "8004:8080"
@@ -274,7 +354,7 @@ services:
           cpus: '0.25'
           memory: 256M
 
-  # Cache Worker Service - Redis Cache Consumer
+  # Cache Worker Service - Redis Cache Consumer (Kafka Consumer)
   cache-worker:
     build:
       context: .
@@ -285,18 +365,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
+      kafka:
         condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
       - ASPNETCORE_URLS=http://+:8080
       - ConnectionStrings__WriteServiceDb=Host=search-db;Port=5432;Database=searchcase;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
       - ConnectionStrings__Redis=redis:6379
-      - RabbitMQ__Host=rabbitmq
-      - RabbitMQ__Username=guest
-      - RabbitMQ__Password=guest
+      - Kafka__BootstrapServers=kafka:9092
+      - Kafka__GroupId=cache-workers
+      - Kafka__Topic=content-batch-updated
+      - Kafka__AutoOffsetReset=earliest
+      - Kafka__EnableAutoCommit=false
       - Cache__ExpirationHours=24
       - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__MassTransit=Information
       - TZ=UTC
     ports:
       - "8005:8080"
@@ -370,7 +453,7 @@ services:
           cpus: '0.5'
           memory: 512M
 
-  # Search Worker Service - Elasticsearch Consumer
+  # Search Worker Service - Elasticsearch Consumer (Kafka Consumer)
   search-worker:
     build:
       context: .
@@ -381,7 +464,7 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
-      rabbitmq:
+      kafka:
         condition: service_healthy
     environment:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Development}
@@ -393,10 +476,13 @@ services:
       - Elasticsearch__MaxRetries=3
       - Elasticsearch__NumberOfShards=1
       - Elasticsearch__NumberOfReplicas=0
-      - RabbitMQ__Host=rabbitmq
-      - RabbitMQ__Username=guest
-      - RabbitMQ__Password=guest
+      - Kafka__BootstrapServers=kafka:9092
+      - Kafka__GroupId=search-workers
+      - Kafka__Topic=content-batch-updated
+      - Kafka__AutoOffsetReset=earliest
+      - Kafka__EnableAutoCommit=false
       - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__MassTransit=Information
       - TZ=UTC
     ports:
       - "8006:8080"

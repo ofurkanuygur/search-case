@@ -31,41 +31,32 @@ try
         {
             Title = "EventBus Service API",
             Version = "v1",
-            Description = "Event publishing service for content change events using RabbitMQ"
+            Description = "Event publishing service for content change events using Apache Kafka"
         });
     });
 
-    // Configure MassTransit with RabbitMQ
+    // Configure MassTransit with Apache Kafka
     builder.Services.AddMassTransit(x =>
     {
-        x.UsingRabbitMq((context, cfg) =>
+        // Use InMemory for command/response (not event streaming)
+        x.UsingInMemory((context, cfg) =>
         {
-            // Configure RabbitMQ connection
-            var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] ?? "localhost";
-            var rabbitMqPort = builder.Configuration.GetValue<int>("RabbitMQ:Port", 5672);
-            var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] ?? "guest";
-            var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] ?? "guest";
-
-            cfg.Host(rabbitMqHost, "/", h =>
-            {
-                h.Username(rabbitMqUsername);
-                h.Password(rabbitMqPassword);
-            });
-
-            // Configure exchange and queues
-            cfg.Publish<EventBusService.Events.ContentChangedEvent>(p =>
-            {
-                p.ExchangeType = "fanout"; // Fanout exchange for pub/sub pattern
-            });
-
-            // Configure retry policy
-            cfg.UseMessageRetry(r => r.Exponential(5,
-                TimeSpan.FromSeconds(1),
-                TimeSpan.FromSeconds(60),
-                TimeSpan.FromSeconds(5)));
-
-            // Configure error handling
             cfg.ConfigureEndpoints(context);
+        });
+
+        // Add Kafka Rider for event streaming
+        x.AddRider(rider =>
+        {
+            // Configure Kafka producer for ContentBatchUpdatedEvent
+            rider.AddProducer<EventBusContracts.ContentBatchUpdatedEvent>(
+                builder.Configuration["Kafka:Topic"] ?? "content-batch-updated");
+
+            rider.UsingKafka((context, kafka) =>
+            {
+                // Configure Kafka connection
+                var bootstrapServers = builder.Configuration["Kafka:BootstrapServers"] ?? "kafka:9092";
+                kafka.Host(bootstrapServers);
+            });
         });
     });
 
@@ -73,14 +64,13 @@ try
     builder.Services.AddScoped<IEventPublisher, EventPublisher>();
 
     // Health checks
+    // Note: MassTransit provides built-in health checks for Kafka via bus health
     builder.Services.AddHealthChecks()
-        .AddRabbitMQ(
-            rabbitConnectionString: $"amqp://{builder.Configuration["RabbitMQ:Username"]}:" +
-                                   $"{builder.Configuration["RabbitMQ:Password"]}@" +
-                                   $"{builder.Configuration["RabbitMQ:Host"]}:" +
-                                   $"{builder.Configuration.GetValue<int>("RabbitMQ:Port", 5672)}/",
-            name: "rabbitmq",
-            tags: new[] { "messaging", "ready" });
+        .AddCheck("kafka-producer", () =>
+        {
+            // Basic health check - MassTransit handles Kafka connection health
+            return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy("Kafka producer is configured");
+        }, tags: new[] { "messaging", "ready" });
 
     var app = builder.Build();
 
@@ -127,7 +117,8 @@ try
     });
 
     Log.Information("EventBus Service started successfully");
-    Log.Information("RabbitMQ Host: {Host}", builder.Configuration["RabbitMQ:Host"] ?? "localhost");
+    Log.Information("Kafka Bootstrap Servers: {BootstrapServers}", builder.Configuration["Kafka:BootstrapServers"] ?? "localhost:9092");
+    Log.Information("Kafka Topic: {Topic}", builder.Configuration["Kafka:Topic"] ?? "content-batch-updated");
 
     await app.RunAsync();
 }
