@@ -11,8 +11,8 @@ The system follows an event-driven microservices architecture with the following
 - **Hangfire**: Orchestrates scheduled jobs (DailyJob, FrequencyJob)
 - **WriteService**: Central orchestrator for content synchronization and database operations
 - **Provider Microservices**: JSON and XML providers fetch and transform external data
-- **EventBusService**: RabbitMQ REST API wrapper for event publishing
-- **Message Broker (RabbitMQ)**: Asynchronous communication between services
+- **EventBusService**: MassTransit Kafka Rider for event publishing
+- **Message Broker (Kafka)**: Asynchronous communication between services
 - **Workers**:
   - **SearchWorker**: Consumes events and indexes to Elasticsearch
   - **CacheWorker**: Consumes events and updates Redis cache
@@ -41,7 +41,7 @@ graph TD
 
     subgraph Event Bus
         EB[EventBusService<br/>:8004]
-        RMQ[RabbitMQ<br/>:5672/15672]
+        Kafka[Kafka<br/>:9094/29092]
     end
 
     subgraph Workers
@@ -67,9 +67,9 @@ graph TD
     XP --> WS
     WS --> PG
     WS --> EB
-    EB --> RMQ
-    RMQ --> SW
-    RMQ --> CW
+    EB --> Kafka
+    Kafka --> SW
+    Kafka --> CW
     SW --> ES
     CW --> RD
     ES --> KB
@@ -112,7 +112,7 @@ docker-compose logs -f
 | **SearchService API** | http://localhost:8007/swagger | Search API documentation |
 | **JSON Provider Swagger** | http://localhost:8001/swagger | JSON Provider API docs |
 | **XML Provider Swagger** | http://localhost:8002/swagger | XML Provider API docs |
-| **RabbitMQ Management** | http://localhost:15672 | Message queue dashboard (guest/guest) |
+| **Kafka UI** | http://localhost:8080 | Message broker dashboard |
 | **Kibana** | http://localhost:5601 | Elasticsearch visualization |
 | **pgAdmin** | http://localhost:5050 | Database management (admin@searchcase.local/admin123) |
 
@@ -137,15 +137,15 @@ docker-compose logs -f
 - Dashboard at http://localhost:8003/hangfire
 
 ### 3. **EventBusService** (Port 8004)
-- REST API wrapper for RabbitMQ
-- Publishes content change events
+- Uses MassTransit Kafka Rider
+- Publishes content change events to Kafka topics
 - Circuit breaker pattern for resilience
 - Endpoints:
   - `POST /api/events/content-changed`
   - `GET /health`
 
 ### 4. **SearchWorker** (Port 8005)
-- Consumes RabbitMQ messages
+- Consumes Kafka messages
 - Indexes content to Elasticsearch
 - Bulk indexing for performance
 - Automatic index management
@@ -153,7 +153,7 @@ docker-compose logs -f
 
 ### 5. **CacheWorker** (Port 8006)
 - Redis caching service
-- Consumes content update events from RabbitMQ
+- Consumes content update events from Kafka
 - Cache invalidation strategy
 - TTL-based expiration
 - Key schema: `content:{contentId}`
@@ -176,7 +176,9 @@ docker-compose logs -f
 
 ### 8. **Infrastructure Services**
 - **PostgreSQL** (Port 5433): Primary database (hangfire, searchcase schemas)
-- **RabbitMQ** (Ports 5672/15672): Message broker with management UI
+- **Apache Kafka** (Port 9094): Message broker
+- **Zookeeper** (Port 2181): Kafka coordination
+- **Kafka UI** (Port 8080): Management interface
 - **Elasticsearch** (Port 9200): Full-text search engine
 - **Kibana** (Port 5601): Search data visualization
 - **Redis** (Port 6379): High-performance caching layer
@@ -189,7 +191,7 @@ docker-compose logs -f
 3. Providers fetch from external APIs and transform to canonical format
 4. WriteService performs change detection (NEW/UPDATED/UNCHANGED)
 5. Changed content is saved to PostgreSQL
-6. Events are published to EventBus → RabbitMQ
+6. Events are published to EventBus → Kafka
 7. SearchWorker consumes messages and indexes to Elasticsearch
 8. CacheWorker consumes messages and updates Redis cache
 9. SearchService queries Elasticsearch/Redis with strategy pattern
@@ -209,7 +211,7 @@ docker-compose logs -f
 - **Asynchronous Processing**: Non-blocking operations for better performance
 - **Loose Coupling**: Services don't need to know about each other
 - **Scalability**: Add more consumers when message volume increases
-- **Reliability**: Messages persisted in RabbitMQ until consumed
+- **Reliability**: Messages persisted in Kafka until consumed
 - **Audit Trail**: Complete event log for debugging and compliance
 
 ### Why Strategy Pattern for Search?
@@ -224,7 +226,7 @@ docker-compose logs -f
 |------------|------------|------------------------|
 | **.NET 8.0/9.0** | High performance, cross-platform, mature ecosystem | Node.js, Java Spring Boot |
 | **PostgreSQL** | ACID compliance, JSONB support, proven reliability | MongoDB, SQL Server |
-| **RabbitMQ** | Battle-tested, excellent .NET support, reliable | Kafka, Azure Service Bus |
+| **Apache Kafka** | High throughput, scalable, durable | RabbitMQ, Azure Service Bus |
 | **Elasticsearch** | Superior full-text search, scalable, rich querying | Azure Cognitive Search, Solr |
 | **Redis** | Blazing fast, simple API, wide adoption | Memcached, Hazelcast |
 | **Docker** | Environment consistency, easy deployment | Kubernetes (overkill for this scale) |
@@ -308,7 +310,7 @@ CREATE TABLE sync_batches (
 - **Graceful Degradation**: Partial provider failures handled
 
 ### Event-Driven Architecture
-- Asynchronous processing via RabbitMQ
+- Asynchronous processing via Apache Kafka
 - Decoupled services communication
 - At-least-once delivery guarantee
 - Dead letter queue for failed messages
@@ -319,7 +321,7 @@ CREATE TABLE sync_batches (
 
 ```bash
 # 1. Start infrastructure only
-docker-compose up -d search-db rabbitmq elasticsearch
+docker-compose up -d search-db kafka zookeeper elasticsearch
 
 # 2. Run microservices locally
 cd src/JsonProviderMicroservice && dotnet run
@@ -358,9 +360,9 @@ dotnet clean SearchCase.sln
 # PostgreSQL
 POSTGRES_PASSWORD=postgres
 
-# RabbitMQ
-RABBITMQ_DEFAULT_USER=guest
-RABBITMQ_DEFAULT_PASS=guest
+# Kafka
+KAFKA_BROKER_ID=1
+KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
 
 # Elasticsearch
 ELASTIC_PASSWORD=elastic
@@ -420,14 +422,11 @@ curl http://localhost:9200/_cat/indices?v
 curl http://localhost:9200/content-index/_search?q=*
 ```
 
-### RabbitMQ Management
+### Kafka Management
 
 ```bash
-# List queues
-curl -u guest:guest http://localhost:15672/api/queues
-
-# Check messages
-open http://localhost:15672
+# Access Kafka UI
+open http://localhost:8080
 ```
 
 ## ⚡ Performance Optimizations
@@ -493,7 +492,8 @@ dotnet test src/WriteService.IntegrationTests
 - **Hangfire**: Background job processing
 - **Entity Framework Core**: ORM for data access
 - **PostgreSQL 16**: Primary database
-- **RabbitMQ 3.13**: Message broker
+- **Apache Kafka 7.5**: Message broker
+- **Zookeeper**: Coordination service
 - **Elasticsearch 8.x**: Search engine
 - **Docker & Docker Compose**: Containerization
 - **Polly**: Resilience and transient fault handling

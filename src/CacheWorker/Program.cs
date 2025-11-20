@@ -4,6 +4,7 @@ using CacheWorker.Services;
 using MassTransit;
 using Serilog;
 using StackExchange.Redis;
+using EventBusContracts;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,55 +32,41 @@ builder.Services.AddDataAccess(builder.Configuration);
 // Register cache service
 builder.Services.AddSingleton<ICacheService, RedisCacheService>();
 
-// Configure MassTransit with RabbitMQ
-builder.Services.AddMassTransit(x =>
-{
-    // Register consumers
-    x.AddConsumer<ContentBatchUpdatedConsumer>();
-
-    x.UsingRabbitMq((context, cfg) =>
+    // Configure MassTransit with Kafka
+    builder.Services.AddMassTransit(x =>
     {
-        var rabbitMqConfig = builder.Configuration.GetSection("RabbitMQ");
-        var host = rabbitMqConfig["Host"] ?? "localhost";
-        var username = rabbitMqConfig["Username"] ?? "guest";
-        var password = rabbitMqConfig["Password"] ?? "guest";
+        x.UsingInMemory((context, cfg) => cfg.ConfigureEndpoints(context));
 
-        cfg.Host(host, "/", h =>
+        x.AddRider(rider =>
         {
-            h.Username(username);
-            h.Password(password);
-        });
+            rider.AddConsumer<ContentBatchUpdatedConsumer>();
 
-        // Configure consumer endpoint with retry policy
-        cfg.ReceiveEndpoint("cache-worker-queue", e =>
-        {
-            e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
-
-            // Retry policy - exponential backoff
-            e.UseMessageRetry(r => r.Exponential(
-                retryLimit: 3,
-                minInterval: TimeSpan.FromSeconds(5),
-                maxInterval: TimeSpan.FromSeconds(30),
-                intervalDelta: TimeSpan.FromSeconds(5)));
-
-            // Circuit breaker
-            e.UseCircuitBreaker(cb =>
+            rider.UsingKafka((context, k) =>
             {
-                cb.TrackingPeriod = TimeSpan.FromMinutes(1);
-                cb.TripThreshold = 5;
-                cb.ActiveThreshold = 2;
-                cb.ResetInterval = TimeSpan.FromMinutes(5);
-            });
+                var kafkaHost = builder.Configuration["Kafka:Host"] ?? "localhost:9092";
+                var topicName = builder.Configuration["Kafka:Topic"] ?? "content-events";
+                var consumerGroup = builder.Configuration["Kafka:ConsumerGroup"] ?? "cache-worker-group";
 
-            // Concurrency limit
-            e.PrefetchCount = 16;
-            e.ConcurrentMessageLimit = 4;
+                k.Host(kafkaHost);
+
+                k.TopicEndpoint<ContentBatchUpdatedEvent>(topicName, consumerGroup, e =>
+                {
+                    e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
+
+                    // Resilience Patterns
+                    e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(1)));
+                    e.UseCircuitBreaker(cb =>
+                    {
+                        cb.TrackingPeriod = TimeSpan.FromMinutes(1);
+                        cb.TripThreshold = 5;
+                        cb.ActiveThreshold = 2;
+                        cb.ResetInterval = TimeSpan.FromMinutes(1);
+                    });
+                });
+            });
         });
 
-        // Configure timeout
-        cfg.ConfigureEndpoints(context);
     });
-});
 
 // Health checks
 builder.Services.AddHealthChecks()
@@ -90,8 +77,11 @@ builder.Services.AddHealthChecks()
     .AddRedis(
         builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379",
         name: "redis-cache",
-        tags: new[] { "cache", "redis" });
-    // RabbitMQ health check removed - MassTransit manages its own connection
+        tags: new[] { "cache", "redis" })
+    .AddKafka(
+        new Confluent.Kafka.ProducerConfig { BootstrapServers = builder.Configuration["Kafka:Host"] ?? "localhost:9092" },
+        name: "kafka",
+        tags: new[] { "messaging", "ready" });
 
 var app = builder.Build();
 
@@ -123,7 +113,7 @@ app.Logger.LogInformation("PostgreSQL Connection: {Connection}",
     builder.Configuration.GetConnectionString("WriteServiceDb"));
 app.Logger.LogInformation("Redis Connection: {Connection}",
     builder.Configuration.GetConnectionString("Redis"));
-app.Logger.LogInformation("RabbitMQ Host: {Host}",
-    builder.Configuration["RabbitMQ:Host"]);
+app.Logger.LogInformation("Kafka Host: {Host}",
+    builder.Configuration["Kafka:Host"]);
 
 app.Run();

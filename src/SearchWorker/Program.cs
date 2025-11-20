@@ -2,6 +2,7 @@ using MassTransit;
 using SearchWorker.Configuration;
 using SearchWorker.Consumers;
 using Serilog;
+using EventBusContracts;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,53 +30,43 @@ builder.Services.AddElasticsearch(builder.Configuration);
 // Register data access services
 builder.Services.AddDataAccess(builder.Configuration);
 
-// Configure MassTransit with RabbitMQ
+// Configure MassTransit with Kafka
 builder.Services.AddMassTransit(x =>
 {
-    // Register consumers
-    x.AddConsumer<ContentBatchUpdatedConsumer>();
+    x.UsingInMemory((context, cfg) => cfg.ConfigureEndpoints(context));
 
-    x.UsingRabbitMq((context, cfg) =>
+    x.AddRider(rider =>
     {
-        var rabbitMqConfig = builder.Configuration.GetSection("RabbitMQ");
-        var host = rabbitMqConfig["Host"] ?? "localhost";
-        var username = rabbitMqConfig["Username"] ?? "guest";
-        var password = rabbitMqConfig["Password"] ?? "guest";
+        rider.AddConsumer<ContentBatchUpdatedConsumer>();
 
-        cfg.Host(host, "/", h =>
+        rider.UsingKafka((context, k) =>
         {
-            h.Username(username);
-            h.Password(password);
-        });
+            var kafkaHost = builder.Configuration["Kafka:Host"] ?? "localhost:9092";
+            var topicName = builder.Configuration["Kafka:Topic"] ?? "content-events";
+            var consumerGroup = builder.Configuration["Kafka:ConsumerGroup"] ?? "search-worker-group";
 
-        // Configure consumer endpoint with retry policy
-        cfg.ReceiveEndpoint("search-worker-queue", e =>
-        {
-            e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
+            k.Host(kafkaHost);
 
-            // Retry policy - exponential backoff
-            e.UseMessageRetry(r => r.Exponential(
-                retryLimit: 3,
-                minInterval: TimeSpan.FromSeconds(5),
-                maxInterval: TimeSpan.FromSeconds(30),
-                intervalDelta: TimeSpan.FromSeconds(5)));
-
-            // Circuit breaker
-            e.UseCircuitBreaker(cb =>
+            k.TopicEndpoint<ContentBatchUpdatedEvent>(topicName, consumerGroup, e =>
             {
-                cb.TrackingPeriod = TimeSpan.FromMinutes(1);
-                cb.TripThreshold = 5;
-                cb.ActiveThreshold = 2;
-                cb.ResetInterval = TimeSpan.FromMinutes(5);
-            });
+                e.ConfigureConsumer<ContentBatchUpdatedConsumer>(context);
+                
+                // Resilience Patterns
+                e.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(1)));
+                e.UseCircuitBreaker(cb =>
+                {
+                    cb.TrackingPeriod = TimeSpan.FromMinutes(1);
+                    cb.TripThreshold = 5;
+                    cb.ActiveThreshold = 2;
+                    cb.ResetInterval = TimeSpan.FromMinutes(1);
+                });
 
-            // Concurrency limit
-            e.PrefetchCount = 16;
-            e.ConcurrentMessageLimit = 4;
+                // Concurrency limit
+                e.PrefetchCount = 16;
+                e.ConcurrentMessageLimit = 4;
+            });
         });
 
-        // Configure timeout
-        cfg.ConfigureEndpoints(context);
     });
 });
 
@@ -88,8 +79,11 @@ builder.Services.AddHealthChecks()
     .AddElasticsearch(
         builder.Configuration.GetSection("Elasticsearch:Url").Value ?? "http://localhost:9200",
         name: "elasticsearch",
-        tags: new[] { "search", "elasticsearch" });
-    // RabbitMQ health check removed - MassTransit manages its own connection
+        tags: new[] { "search", "elasticsearch" })
+    .AddKafka(
+        new Confluent.Kafka.ProducerConfig { BootstrapServers = builder.Configuration["Kafka:Host"] ?? "localhost:9092" },
+        name: "kafka",
+        tags: new[] { "messaging", "ready" });
 
 var app = builder.Build();
 
@@ -126,7 +120,7 @@ app.Logger.LogInformation("Elasticsearch URL: {Url}",
     builder.Configuration.GetSection("Elasticsearch:Url").Value);
 app.Logger.LogInformation("Elasticsearch Index: {Index}",
     builder.Configuration.GetSection("Elasticsearch:IndexName").Value);
-app.Logger.LogInformation("RabbitMQ Host: {Host}",
-    builder.Configuration["RabbitMQ:Host"]);
+app.Logger.LogInformation("Kafka Host: {Host}",
+    builder.Configuration["Kafka:Host"]);
 
 app.Run();

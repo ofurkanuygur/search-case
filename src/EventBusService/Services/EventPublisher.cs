@@ -3,18 +3,18 @@ using MassTransit;
 namespace EventBusService.Services;
 
 /// <summary>
-/// Implementation of event publisher using MassTransit and RabbitMQ
+/// Implementation of event publisher using MassTransit and Kafka
 /// </summary>
 public class EventPublisher : IEventPublisher
 {
-    private readonly IPublishEndpoint _publishEndpoint;
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<EventPublisher> _logger;
 
     public EventPublisher(
-        IPublishEndpoint publishEndpoint,
+        IServiceProvider serviceProvider,
         ILogger<EventPublisher> logger)
     {
-        _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -34,7 +34,8 @@ public class EventPublisher : IEventPublisher
                 typeof(T).Name,
                 eventMessage);
 
-            await _publishEndpoint.Publish(eventMessage, cancellationToken);
+            var producer = _serviceProvider.GetRequiredService<ITopicProducer<T>>();
+            await producer.Produce(eventMessage, cancellationToken);
 
             _logger.LogInformation(
                 "Successfully published event: {EventType}",
@@ -65,11 +66,13 @@ public class EventPublisher : IEventPublisher
             events.Count,
             typeof(T).Name);
 
-        var publishTasks = events.Select(evt => PublishAsync(evt, cancellationToken));
-
         try
         {
-            await Task.WhenAll(publishTasks);
+            var producer = _serviceProvider.GetRequiredService<ITopicProducer<T>>();
+            
+            // Kafka producer is efficient with batching, we can just produce them
+            var tasks = events.Select(e => producer.Produce(e, cancellationToken));
+            await Task.WhenAll(tasks);
 
             _logger.LogInformation(
                 "Successfully published batch of {Count} {EventType} events",
