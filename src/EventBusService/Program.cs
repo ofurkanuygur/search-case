@@ -31,41 +31,28 @@ try
         {
             Title = "EventBus Service API",
             Version = "v1",
-            Description = "Event publishing service for content change events using RabbitMQ"
+            Description = "Event publishing service for content change events using Kafka"
         });
     });
 
-    // Configure MassTransit with RabbitMQ
+    // Configure MassTransit with Kafka
     builder.Services.AddMassTransit(x =>
     {
-        x.UsingRabbitMq((context, cfg) =>
+        x.UsingInMemory((context, cfg) => 
         {
-            // Configure RabbitMQ connection
-            var rabbitMqHost = builder.Configuration["RabbitMQ:Host"] ?? "localhost";
-            var rabbitMqPort = builder.Configuration.GetValue<int>("RabbitMQ:Port", 5672);
-            var rabbitMqUsername = builder.Configuration["RabbitMQ:Username"] ?? "guest";
-            var rabbitMqPassword = builder.Configuration["RabbitMQ:Password"] ?? "guest";
+            // No endpoints needed for producer-only service
+        });
 
-            cfg.Host(rabbitMqHost, "/", h =>
+        x.AddRider(rider =>
+        {
+            rider.AddProducer<EventBusService.Events.ContentChangedEvent>("content-events");
+            rider.AddProducer<EventBusContracts.ContentBatchUpdatedEvent>("content-batch-events");
+
+            rider.UsingKafka((context, k) =>
             {
-                h.Username(rabbitMqUsername);
-                h.Password(rabbitMqPassword);
+                var kafkaHost = builder.Configuration["Kafka:Host"] ?? "localhost:9094";
+                k.Host(kafkaHost);
             });
-
-            // Configure exchange and queues
-            cfg.Publish<EventBusService.Events.ContentChangedEvent>(p =>
-            {
-                p.ExchangeType = "fanout"; // Fanout exchange for pub/sub pattern
-            });
-
-            // Configure retry policy
-            cfg.UseMessageRetry(r => r.Exponential(5,
-                TimeSpan.FromSeconds(1),
-                TimeSpan.FromSeconds(60),
-                TimeSpan.FromSeconds(5)));
-
-            // Configure error handling
-            cfg.ConfigureEndpoints(context);
         });
     });
 
@@ -74,12 +61,9 @@ try
 
     // Health checks
     builder.Services.AddHealthChecks()
-        .AddRabbitMQ(
-            rabbitConnectionString: $"amqp://{builder.Configuration["RabbitMQ:Username"]}:" +
-                                   $"{builder.Configuration["RabbitMQ:Password"]}@" +
-                                   $"{builder.Configuration["RabbitMQ:Host"]}:" +
-                                   $"{builder.Configuration.GetValue<int>("RabbitMQ:Port", 5672)}/",
-            name: "rabbitmq",
+        .AddKafka(
+            new Confluent.Kafka.ProducerConfig { BootstrapServers = builder.Configuration["Kafka:Host"] ?? "localhost:9094" },
+            name: "kafka",
             tags: new[] { "messaging", "ready" });
 
     var app = builder.Build();
@@ -127,7 +111,7 @@ try
     });
 
     Log.Information("EventBus Service started successfully");
-    Log.Information("RabbitMQ Host: {Host}", builder.Configuration["RabbitMQ:Host"] ?? "localhost");
+    Log.Information("Kafka Host: {Host}", builder.Configuration["Kafka:Host"] ?? "localhost:9094");
 
     await app.RunAsync();
 }
